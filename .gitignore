@@ -1,0 +1,21 @@
+# Python/runtime
+.venv/
+__pycache__/
+*.py[cod]
+
+# Local secrets
+.env
+
+# Generated data and indexes
+data/processed/
+data/raw/*.pdf
+storage/
+
+# Logs and local OS/editor files
+*.log
+.DS_Store
+Thumbs.db
+
+# Evaluation outputs
+eval_report.json
+eval_log.txt

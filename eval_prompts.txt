@@ -1,0 +1,242 @@
+# STELLAR-RAG — Evaluation Prompts
+# ──────────────────────────────────────────────────────────────────────────────
+# Viết mỗi câu hỏi trên một dòng riêng.
+# Dòng bắt đầu bằng # là comment — bị bỏ qua.
+# Dòng trống bị bỏ qua.
+#
+# Chạy đánh giá:
+#   cd <project-root>
+#   .venv\Scripts\python eval_pipeline.py
+#
+# Kết quả lưu tại:
+#   eval_report.json  — tất cả metrics dạng JSON
+#   eval_log.txt      — log chi tiết từng prompt (chunks retrieved, context, answer)
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ── Câu hỏi cơ bản ─────────────────────────────────────────────────────────
+Học phí ngành CNTT năm học 2024-2025 là bao nhiêu?
+Điều kiện tốt nghiệp đại học gồm những gì?
+Cần bao nhiêu tín chỉ để hoàn thành chương trình?
+
+# ── Câu hỏi với viết tắt ───────────────────────────────────────────────────
+GPA tối thiểu để không bị cảnh báo học tập là bao nhiêu?
+Sinh viên cần đạt GPA bao nhiêu để xét học bổng KK?
+TKB học kỳ 1 năm 2024 có thể xem ở đâu?
+
+# ── Câu hỏi về thời gian/lịch ──────────────────────────────────────────────
+Lúc 21h tối thứ 2 tại cơ sở Nguyễn Văn Cừ đang học tiết mấy?
+Tiết 5 bắt đầu lúc mấy giờ?
+Giờ học buổi tối bắt đầu từ tiết mấy?
+
+# ── Câu hỏi đa bước / phức tạp ────────────────────────────────────────────
+Sinh viên bị cảnh báo học tập lần 2 thì có bị buộc thôi học không, và điều kiện để phục hồi là gì?
+Môn học tiên quyết của ngành CNTT là gì, và tôi phải đăng ký chúng theo thứ tự nào?
+Nếu tôi trượt môn bắt buộc thì cần làm gì để tốt nghiệp đúng hạn?
+
+# ── Câu hỏi bẫy / mơ hồ ───────────────────────────────────────────────────
+Có cách nào để cải thiện điểm sau khi học kỳ kết thúc không?
+Trường có cho phép học bù hoặc học vượt không?
+Sinh viên ngoại tỉnh cần đăng ký gì trước khi nhập học?
+
+# ── Câu hỏi không có trong tài liệu (stress test) ─────────────────────────
+Thầy Nguyễn Văn A dạy môn gì và số điện thoại liên hệ là bao nhiêu?
+Canteen trường bán những món gì và giá cả thế nào?
+
+#1. Câu hỏi cơ bản (50 câu)
+Học phí ngành CNTT năm học 2024-2025 là bao nhiêu?
+Điều kiện tốt nghiệp đại học gồm những gì?
+Cần bao nhiêu tín chỉ để hoàn thành chương trình?
+Sinh viên phải đạt GPA tối thiểu bao nhiêu để tốt nghiệp?
+Thời gian đào tạo chuẩn của ngành CNTT là bao lâu?
+Một năm học được chia thành mấy học kỳ?
+Sinh viên được phép đăng ký tối đa bao nhiêu tín chỉ mỗi học kỳ?
+Điều kiện để được đăng ký học phần là gì?
+Điểm đạt của một học phần là bao nhiêu?
+Trường sử dụng thang điểm nào để đánh giá kết quả học tập?
+Sinh viên có được học cải thiện điểm không?
+Điều kiện để được xét tốt nghiệp là gì?
+Sinh viên bị cảnh báo học tập khi nào?
+Quy định về điểm danh trên lớp như thế nào?
+Sinh viên được bảo lưu kết quả học tập trong bao lâu?
+Điều kiện để được chuyển ngành là gì?
+Học phần tiên quyết là gì?
+Học phần song hành là gì?
+Tín chỉ tích lũy được tính như thế nào?
+Sinh viên có thể đăng ký học lại tối đa bao nhiêu lần?
+Khi nào sinh viên bị buộc thôi học?
+Điều kiện xét học bổng khuyến khích học tập là gì?
+Quy trình đăng ký môn học được thực hiện như thế nào?
+Sinh viên có được học vượt không?
+Điều kiện để được học song ngành là gì?
+Điểm GPA được tính như thế nào?
+Điểm rèn luyện có ảnh hưởng đến tốt nghiệp không?
+Sinh viên nghỉ học tạm thời cần làm thủ tục gì?
+Trường hợp nào được miễn học phí?
+Điều kiện để được xét tốt nghiệp sớm là gì?
+Quy định về thi lại học phần như thế nào?
+Sinh viên được phép bảo lưu học phần trong trường hợp nào?
+Điều kiện để được công nhận tốt nghiệp đại học là gì?
+Quy định về khóa luận tốt nghiệp ra sao?
+Sinh viên có bắt buộc tham gia thực tập không?
+Điều kiện đăng ký thực tập tốt nghiệp là gì?
+Sinh viên có thể học cùng lúc hai chương trình đào tạo không?
+Quy định về chuẩn ngoại ngữ đầu ra là gì?
+Chuẩn tin học đầu ra gồm những yêu cầu nào?
+Sinh viên bị đình chỉ học tập trong trường hợp nào?
+Điều kiện xét học tiếp sau khi bị cảnh báo học tập là gì?
+Sinh viên có được chuyển trường không?
+Quy định về thời gian tối đa hoàn thành chương trình là gì?
+Khi nào sinh viên bị hủy kết quả học phần?
+Sinh viên có được miễn học phần đã học ở trường khác không?
+Điều kiện để được công nhận tín chỉ tương đương là gì?
+Quy định về học phí học lại như thế nào?
+Sinh viên có được đăng ký học hè không?
+Điều kiện tham gia lớp chất lượng cao là gì?
+Quy định về phúc khảo bài thi như thế nào?
+#2. Câu hỏi với viết tắt (50 câu)
+GPA tối thiểu để không bị cảnh báo học tập là bao nhiêu?
+Sinh viên cần đạt GPA bao nhiêu để xét học bổng KK?
+TKB học kỳ 1 năm 2024 có thể xem ở đâu?
+GPA được tính theo thang 4 hay thang 10?
+CPA khác gì với GPA?
+Điều kiện đạt chuẩn TOEIC đầu ra là bao nhiêu?
+SV bị cảnh báo học tập nếu GPA dưới mức nào?
+ĐKHP được mở vào thời gian nào?
+SV có thể hủy ĐKHP sau khi đăng ký không?
+HP học lại có cao hơn HP bình thường không?
+GPA học kỳ và GPA tích lũy khác nhau thế nào?
+Điều kiện xét HBKKHT dựa trên GPA hay DRL?
+DRL tối thiểu để xét học bổng là bao nhiêu?
+TKB được cập nhật trên portal hay LMS?
+LMS của trường dùng để làm gì?
+Sinh viên ngành CNTT cần bao nhiêu TC để tốt nghiệp?
+TC tự chọn tối thiểu là bao nhiêu?
+GPA bao nhiêu thì được xếp loại giỏi?
+GPA bao nhiêu thì bị buộc thôi học?
+Chuẩn đầu ra IELTS có được quy đổi sang TOEIC không?
+Điều kiện đăng ký KLTN là gì?
+Sinh viên có thể thay KLTN bằng HP chuyên đề không?
+GPA tối thiểu để học song ngành là bao nhiêu?
+SV năm nhất có được ĐKHP vượt không?
+TKB buổi tối bắt đầu từ tiết mấy?
+HP tiên quyết có bắt buộc phải đậu trước không?
+HP song hành có thể học cùng lúc không?
+Điều kiện miễn HP GDTC là gì?
+Chuẩn MOS có được chấp nhận thay chuẩn tin học không?
+GPA học kỳ dưới 1.0 có bị cảnh báo không?
+Điều kiện xét tốt nghiệp loại xuất sắc theo GPA là gì?
+SV bị cảnh báo lần 1 có bị giới hạn TC đăng ký không?
+Học phí được tính theo TC hay theo học kỳ?
+TC tối đa học hè là bao nhiêu?
+SV có thể xem TKB trên app mobile không?
+Điều kiện xét miễn HP ngoại ngữ là gì?
+Điểm QT và CK được tính theo tỷ lệ nào?
+SV nghỉ học tạm thời có giữ nguyên GPA không?
+CPA có bao gồm điểm học lại không?
+GPA bao nhiêu thì đủ điều kiện trao đổi quốc tế?
+Điều kiện học CTCLC là gì?
+HP thực tập có tính vào GPA không?
+ĐRL có ảnh hưởng đến xét KTX không?
+TKB học quân sự được thông báo ở đâu?
+HP bắt buộc nếu trượt nhiều lần thì xử lý sao?
+Sinh viên có thể ĐKHP ngoài ngành không?
+GPA dưới 2.0 có được học vượt không?
+Điều kiện bảo lưu KQHT là gì?
+TKB có thay đổi sau tuần đầu học không?
+SV tốt nghiệp muộn có cần đóng thêm HP không?
+#3. Câu hỏi về thời gian/lịch (50 câu)
+Lúc 21h tối thứ 2 tại cơ sở Nguyễn Văn Cừ đang học tiết mấy?
+Tiết 5 bắt đầu lúc mấy giờ?
+Giờ học buổi tối bắt đầu từ tiết mấy?
+Một tiết học kéo dài bao nhiêu phút?
+Thời gian nghỉ giữa các tiết là bao lâu?
+Học kỳ 1 thường bắt đầu vào tháng mấy?
+Hạn cuối đăng ký học phần là khi nào?
+Sinh viên được hủy môn trong bao lâu sau khi đăng ký?
+Lịch thi cuối kỳ thường được công bố trước bao lâu?
+Khi nào bắt đầu học kỳ hè?
+Thời gian tối đa để hoàn thành chương trình là bao nhiêu năm?
+Sinh viên được bảo lưu tối đa bao nhiêu học kỳ?
+Khi nào có kết quả học tập học kỳ?
+Thời gian phúc khảo bài thi kéo dài bao lâu?
+Bao lâu sau khi thi thì có điểm?
+Tiết 1 buổi sáng bắt đầu lúc mấy giờ?
+Buổi chiều bắt đầu từ tiết mấy?
+Học buổi tối kết thúc lúc mấy giờ?
+Thời gian đăng ký học phần học kỳ 2 là khi nào?
+Sinh viên năm nhất nhập học vào thời điểm nào?
+Thời gian học GDQP kéo dài bao lâu?
+Khi nào sinh viên được xét tốt nghiệp?
+Hạn nộp học phí mỗi học kỳ là ngày nào?
+Thời gian đăng ký học cải thiện điểm là khi nào?
+Bao lâu thì bị xóa tên khỏi danh sách lớp nếu không đóng học phí?
+Sinh viên được nghỉ Tết bao nhiêu ngày?
+Lịch học cuối tuần thường bắt đầu lúc mấy giờ?
+Thời gian thực tập tốt nghiệp kéo dài bao lâu?
+Khi nào mở cổng đăng ký ký túc xá?
+Thời hạn nộp chứng chỉ ngoại ngữ là khi nào?
+Bao lâu sau cảnh báo học tập thì bị buộc thôi học?
+Thời gian xét học bổng là cuối mỗi học kỳ hay mỗi năm?
+Tiết 10 kết thúc lúc mấy giờ?
+Học phần tiên quyết cần hoàn thành trước học kỳ nào?
+Bao lâu được phép học lại một học phần đã trượt?
+Khi nào sinh viên được đăng ký khóa luận tốt nghiệp?
+Thời gian tối thiểu để hoàn thành chương trình là bao lâu?
+Học kỳ phụ kéo dài mấy tuần?
+Khi nào sinh viên phải xác nhận nhập học?
+Lịch học quân sự được thông báo trước bao lâu?
+Bao lâu sau khi tốt nghiệp thì nhận bằng?
+Thời gian xét cảnh báo học tập là cuối học kỳ hay cuối năm?
+Tiết học cuối cùng trong ngày kết thúc lúc mấy giờ?
+Khi nào được phép đăng ký song ngành?
+Bao lâu sau khi nghỉ học tạm thời thì phải quay lại học?
+Thời gian làm khóa luận tốt nghiệp là mấy tháng?
+Hạn cuối bổ sung hồ sơ sinh viên là khi nào?
+Bao lâu trường cập nhật GPA sau khi có điểm thi?
+Khi nào sinh viên được xét miễn học phần?
+Thời gian học tối đa của chương trình chất lượng cao là bao lâu?
+#4. Câu hỏi đa bước / phức tạp (50 câu)
+Sinh viên bị cảnh báo học tập lần 2 thì có bị buộc thôi học không, và điều kiện để phục hồi là gì?
+Môn học tiên quyết của ngành CNTT là gì, và tôi phải đăng ký chúng theo thứ tự nào?
+Nếu tôi trượt môn bắt buộc thì cần làm gì để tốt nghiệp đúng hạn?
+Sinh viên GPA thấp nhưng điểm rèn luyện cao có được xét học bổng không?
+Nếu bị cảnh báo học tập liên tiếp thì số tín chỉ đăng ký tối đa thay đổi thế nào?
+Sinh viên vừa muốn học song ngành vừa muốn học vượt cần đáp ứng điều kiện gì?
+Nếu học lại một môn thì GPA được tính theo điểm nào?
+Sinh viên bảo lưu một học kỳ có ảnh hưởng đến thời gian tốt nghiệp không?
+Nếu chưa đạt chuẩn ngoại ngữ nhưng đã đủ tín chỉ thì có được tốt nghiệp không?
+Sinh viên bị đình chỉ học tập có thể quay lại học bằng cách nào?
+Nếu học cải thiện điểm nhiều lần thì trường lấy điểm cao nhất hay điểm gần nhất?
+Sinh viên có thể chuyển ngành sau năm nhất nếu còn nợ môn không?
+Nếu trượt học phần tiên quyết thì các môn sau có bị hủy đăng ký không?
+Điều kiện để vừa học khóa luận vừa học cải thiện GPA là gì?
+Sinh viên có thể học cùng lúc chương trình chính quy và chất lượng cao không?
+Nếu nghỉ học tạm thời do bệnh thì cần giấy tờ gì và thời hạn bao lâu?
+Sinh viên bị buộc thôi học có thể xin học lại không?
+Nếu học vượt để tốt nghiệp sớm thì học phí được tính thế nào?
+Sinh viên có thể dùng chứng chỉ quốc tế để miễn học phần ngoại ngữ ra sao?
+Nếu GPA dưới chuẩn nhưng đủ điểm tốt nghiệp thì xếp loại bằng thế nào?
+Điều kiện để chuyển trường nhưng vẫn được công nhận tín chỉ cũ là gì?
+Nếu sinh viên bị trùng lịch học thì xử lý đăng ký học phần như thế nào?
+Sinh viên học song ngành có cần hoàn thành chuẩn đầu ra của cả hai ngành không?
+Nếu bị điểm F nhiều lần thì có ảnh hưởng đến xét tốt nghiệp không?
+Sinh viên có thể vừa thực tập vừa đăng ký học thêm môn không?
+Nếu học phí chưa đóng đủ thì có được thi cuối kỳ không?
+Sinh viên bị kỷ luật có được xét học bổng không?
+Nếu đăng ký quá số tín chỉ quy định thì hệ thống xử lý ra sao?
+Sinh viên học lại có được ưu tiên mở lớp không?
+Nếu điểm GPA tăng sau học kỳ cuối thì xếp loại tốt nghiệp có thay đổi không?
+Sinh viên học chương trình quốc tế có áp dụng quy chế GPA giống hệ chuẩn không?
+Nếu học phần bị hủy do ít sinh viên đăng ký thì phải làm gì?
+Sinh viên có thể đổi lớp học phần sau khi học đã bắt đầu không?
+Nếu nghỉ quá số buổi quy định thì có được dự thi không?
+Sinh viên bị cảnh báo học tập có được đăng ký học hè để cải thiện GPA không?
+Nếu nợ học phí học kỳ trước thì có được đăng ký môn mới không?
+Sinh viên có thể xin miễn học GDQP trong trường hợp nào?
+Nếu điểm thực hành và điểm lý thuyết chênh lệch lớn thì tính tổng kết ra sao?
+Sinh viên học ngành kép có cần thực tập hai lần không?
+Nếu sinh viên muốn rút bớt tín chỉ sau khi học bắt đầu thì có bị tính học phí không?
+Sinh viên bị mất quyền thi do vi phạm quy chế có được thi lại không?
+Nếu đã hoàn thành tín chỉ nhưng chưa đủ chuẩn ngoại ngữ thì có bị kéo dài thời gian học không?
+Sinh viên có thể đăng ký học trước học phần không tiên quyết của học kỳ sau không?
+Nếu bị điểm I thì bao lâu phải hoàn thành học phần?
