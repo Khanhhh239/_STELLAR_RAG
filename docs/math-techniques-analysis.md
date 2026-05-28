@@ -385,7 +385,7 @@ The system embeds descriptions for document types such as `hoc_phi`, `quy_che`, 
 The best document type is:
 
 $$
-t^\*
+t^*
 =
 \arg\max_t
 \hat{\mathbf{v}}_q^\top
@@ -398,7 +398,7 @@ $$
 s'(q,d)
 =
 \begin{cases}
-\beta s(q,d), & \operatorname{type}(d)=t^\* \\
+\beta s(q,d), & \operatorname{type}(d)=t^* \\
 s(q,d), & \text{otherwise}
 \end{cases}
 $$

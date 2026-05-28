@@ -284,7 +284,7 @@ The cross-encoder is slower (no pre-computed document embeddings) but more accur
 
 Embed natural-language descriptions of each document type:
 
-$$\mathbf{d}_{\text{type}} = \text{Embed}(\text{"học phí, chi phí học tập, ..."}) \quad \text{for type = hoc\_phi}$$
+$$\mathbf{d}_{\text{type}} = \text{Embed}(\text{"học phí, chi phí học tập, ..."}) \quad \text{for type = hoc_phi}$$
 
 Query-to-type similarity:
 
@@ -292,6 +292,6 @@ $$\text{type}^* = \arg\max_k \hat{\mathbf{q}} \cdot \hat{\mathbf{d}}_k, \quad \t
 
 Multiply scores of matching documents:
 
-$$s'(d) = \begin{cases} s(d) \times 1.35 & \text{doc\_type}(d) = \text{type}^* \\ s(d) & \text{otherwise} \end{cases}$$
+$$s'(d) = \begin{cases} s(d) \times 1.35 & \text{doc_type}(d) = \text{type}^* \\ s(d) & \text{otherwise} \end{cases}$$
 
 This avoids penalising non-matching documents — it only boosts relevant ones.
