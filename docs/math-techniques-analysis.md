@@ -30,7 +30,7 @@ $$
 \delta_y
 =
 \max\left(
-0.6 \cdot \operatorname{median}(h_i),
+0.6 \cdot \text{median}(h_i),
 8
 \right)
 $$
@@ -68,7 +68,7 @@ $$
 For normalized vectors, inner product equals cosine similarity:
 
 $$
-\operatorname{sim}(q,d)
+\text{sim}(q,d)
 =
 \hat{\mathbf{v}}_q^\top \hat{\mathbf{v}}_d
 =
@@ -121,7 +121,7 @@ $$
 FAISS returns:
 
 $$
-\operatorname{TopK}_{d_i}
+\text{TopK}_{d_i}
 \,
 s_{\text{dense}}(q,d_i)
 $$
@@ -136,16 +136,16 @@ $$
 s_{\text{bm25}}(q,d)
 =
 \sum_{t \in q}
-\operatorname{IDF}(t)
+\text{IDF}(t)
 \cdot
 \frac{f(t,d)(k_1+1)}
-{f(t,d)+k_1\left(1-b+b\frac{|d|}{\operatorname{avgdl}}\right)}
+{f(t,d)+k_1\left(1-b+b\frac{|d|}{\text{avgdl}}\right)}
 $$
 
 The inverse document frequency term is:
 
 $$
-\operatorname{IDF}(t)
+\text{IDF}(t)
 =
 \log
 \frac{N-n_t+0.5}{n_t+0.5}
@@ -186,7 +186,7 @@ The graph contains document hierarchy, extracted triplets, rich named entities, 
 Entity linking compares the query embedding with entity embeddings:
 
 $$
-\operatorname{link}(q)
+\text{link}(q)
 =
 \left\{
 e_i
@@ -238,7 +238,7 @@ The graph score of a retrieved chunk is:
 $$
 s_{\text{graph}}(q,d)
 =
-r_{\operatorname{chunk}(d)}
+r_{\text{chunk}(d)}
 $$
 
 If PageRank fails or returns no chunks, the code falls back to weighted BFS:
@@ -367,7 +367,7 @@ s_{\text{rrf}}(d)
 =
 \sum_{\ell \in L}
 \frac{1}
-{k_{\text{rrf}}+\operatorname{rank}_\ell(d)}
+{k_{\text{rrf}}+\text{rank}_\ell(d)}
 $$
 
 where `L` is the set of retrieval lists. The default is:
@@ -398,7 +398,7 @@ $$
 s'(q,d)
 =
 \begin{cases}
-\beta s(q,d), & \operatorname{type}(d)=t^* \\
+\beta s(q,d), & \text{type}(d)=t^* \\
 s(q,d), & \text{otherwise}
 \end{cases}
 $$
@@ -544,7 +544,7 @@ G_q[j,j]
 =
 \begin{cases}
 \hat{\mathbf{v}}_{c_j}^\top\hat{\mathbf{v}}_q,
-& j \in \operatorname{TopL}
+& j \in \text{TopL}
 \left(
 \hat{\mathbf{v}}_{c_j}^\top\hat{\mathbf{v}}_q
 \right) \\
@@ -691,7 +691,7 @@ $$
 The next selected chunk maximizes:
 
 $$
-\operatorname{MMR}(d)
+\text{MMR}(d)
 =
 \lambda s(d)
 -
@@ -715,7 +715,7 @@ Each selected chunk receives a character budget proportional to its score:
 $$
 B_i
 =
-\operatorname{clip}
+\text{clip}
 \left(
 B_{\max}
 n
@@ -736,7 +736,7 @@ $$
 If a chunk is longer than its budget, sentences are ranked by query-token overlap:
 
 $$
-\operatorname{sent\_score}(u,q)
+\text{sent\_score}(u,q)
 =
 \frac{|T(u)\cap T(q)|}
 {\sqrt{|T(u)|}}
@@ -781,7 +781,7 @@ $$
 The router maps the processed query to:
 
 $$
-\operatorname{tier}(q)
+\text{tier}(q)
 \in
 \{\text{simple},\text{compound},\text{complex}\}
 $$
@@ -813,7 +813,7 @@ Retrieval then merges candidates from the relevant sub-queries and variants.
 The lightweight Self-RAG heuristic estimates context quality with token overlap:
 
 $$
-\operatorname{quality}(q,C)
+\text{quality}(q,C)
 =
 \frac{|T(q)\cap T(C)|}
 {|T(q)|}
@@ -822,7 +822,7 @@ $$
 If:
 
 $$
-\operatorname{quality}(q,C)
+\text{quality}(q,C)
 <
 \theta_{\text{self}}
 $$
@@ -916,7 +916,7 @@ $$
 Output grounding overlap is:
 
 $$
-\operatorname{ground}(a,C)
+\text{ground}(a,C)
 =
 \frac{|T(a)\cap T(C)|}
 {|T(a)|}
@@ -925,7 +925,7 @@ $$
 If:
 
 $$
-\operatorname{ground}(a,C) < 0.10
+\text{ground}(a,C) < 0.10
 $$
 
 the answer is flagged as potentially under-grounded. The output guardrail also detects speculative phrases such as "I think", "probably", and Vietnamese equivalents.
@@ -967,15 +967,15 @@ A compact view of the final ranking path is:
 $$
 S_{\text{final}}(q,d)
 =
-\operatorname{MMR}
+\text{MMR}
 \left(
-\operatorname{CE}
+\text{CE}
 \left(
-\operatorname{EHRAG}
+\text{EHRAG}
 \left(
-\operatorname{Boost}
+\text{Boost}
 \left(
-\operatorname{Fusion}
+\text{Fusion}
 \left(
 s_{\text{dense}},
 s_{\text{bm25}},
