@@ -43,7 +43,7 @@ EHRAG builds two complementary hyperedge types over the entity set $E$:
 
 $H^{\text{str}}$ is a binary incidence matrix of shape $E \times C$:
 
-$$H^{\text{str}}_{e,\, c} = \begin{cases} 1 & \text{entity } e \text{ appears in chunk } c \\ 0 & \text{otherwise} \end{cases}$$
+$$H^{\text{str}}_{e,\, c} = \begin{cases} 1 & \text{entity } e \text{ appears in chunk } c \cr 0 & \text{otherwise} \end{cases}$$
 
 Built from the knowledge graph: for each chunk node, follow outgoing `contains_entity` edges to find which entities it contains.
 
@@ -60,13 +60,13 @@ BIRCH (Balanced Iterative Reducing and Clustering using Hierarchies) groups the 
 The algorithm builds a Clustering Feature Tree (CF Tree) online. Each CF node stores the triple $(N, \mathbf{LS}, SS)$:
 - $N$: number of points in the subcluster
 - $\mathbf{LS} = \sum_{i=1}^{N} \mathbf{v}_i$: linear sum of embeddings
-- $SS = \sum_{i=1}^{N} \|\mathbf{v}_i\|^2$: sum of squared norms
+- $SS = \sum_{i=1}^{N} \lVert\mathbf{v}_i\rVert^2$: sum of squared norms
 
 Centroid and radius of a subcluster:
 
-$$\mathbf{c} = \frac{\mathbf{LS}}{N}, \qquad R = \sqrt{\frac{SS}{N} - \|\mathbf{c}\|^2}$$
+$$\mathbf{c} = \frac{\mathbf{LS}}{N}, \qquad R = \sqrt{\frac{SS}{N} - \lVert\mathbf{c}\rVert^2}$$
 
-A new point is merged into the nearest subcluster if $R_{\text{new}} \leq \text{threshold}$ (default 0.5); otherwise a new subcluster is created.
+A new point is merged into the nearest subcluster if $\,R_{\text{new}} \leq \text{threshold}$ (default 0.5); otherwise a new subcluster is created.
 
 After tree construction, $K$ is the number of leaf subclusters. The centroid of cluster $k$ is computed as the mean of its member embeddings:
 
@@ -78,11 +78,11 @@ $$\mathbf{c}_k = \frac{1}{|E_k|} \sum_{e \in E_k} \mathbf{v}_e$$
 
 For each cluster $k$, select the $D$ entities nearest to centroid $\mathbf{c}_k$:
 
-$$N_D(k) = \text{argtop-}D\left\{e : -\|\mathbf{v}_e - \mathbf{c}_k\|^2\right\}$$
+$$N_D(k) = \text{argtop-}D\left\lbrace e : -\lVert\mathbf{v}_e - \mathbf{c}_k\rVert^2\right\rbrace$$
 
 Assign weights via a Gaussian kernel:
 
-$$H^{\text{sem}}_{e,\, k} = \begin{cases} \exp\left(-\dfrac{\|\mathbf{v}_e - \mathbf{c}_k\|^2}{\tau}\right) & e \in N_D(k) \\ 0 & \text{otherwise} \end{cases}$$
+$$H^{\text{sem}}_{e,\, k} = \begin{cases} \exp\left(-\dfrac{\lVert\mathbf{v}_e - \mathbf{c}_k\rVert^2}{\tau}\right) & e \in N_D(k) \cr 0 & \text{otherwise} \end{cases}$$
 
 **Interpretation**: entities close to the cluster centroid get high weight; entities at the fringes get exponentially lower weight. $\tau$ controls the falloff — larger $\tau$ gives a flatter distribution, smaller $\tau$ concentrates weight near the centroid.
 
@@ -130,7 +130,7 @@ $$\tilde{\mathbf{s}}^{(t)} = G_q \, \mathbf{s}^{(t)} \in \mathbb{R}^C \qquad \te
 
 $$\Delta\mathbf{a}^{(t+1)} = H^{\text{str}} \, \tilde{\mathbf{s}}^{(t)} \in \mathbb{R}^E \qquad \text{(chunk} \to \text{entity backpropagation)}$$
 
-$$a^{(t+1)}_e = \begin{cases} \Delta a^{(t+1)}_e & \text{if } \Delta a^{(t+1)}_e \geq \varepsilon \\ 0 & \text{otherwise} \end{cases} \qquad \text{(threshold)}$$
+$$a^{(t+1)}_e = \begin{cases} \Delta a^{(t+1)}_e & \text{if } \Delta a^{(t+1)}_e \geq \varepsilon \cr 0 & \text{otherwise} \end{cases} \qquad \text{(threshold)}$$
 
 Accumulate cumulative entity weights:
 
@@ -160,7 +160,7 @@ $$S(d) = S_{\text{dense}}(q, d) + \lambda_1 \sum_{e \in E(d)} \log(1 + w_e) + \l
 
 | Term | Formula | Captures |
 |------|---------|---------|
-| Base score | $S_{\text{dense}}(q, d)$ | QDAP-S fused hybrid score |
+| Base score | $\,S_{\text{dense}}(q, d)$ | QDAP-S fused hybrid score |
 | Entity evidence | $\lambda_1 \sum_{e \in E(d)} \log(1 + w_e)$ | Entities in chunk $d$ with high diffusion weight |
 | Cluster topic | $\lambda_2 \log(1 + \sum_k S_{\text{cluster}}(k))$ | Semantic clusters relevant to the query |
 

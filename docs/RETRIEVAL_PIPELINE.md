@@ -134,7 +134,7 @@ Returns top 2k by BM25 score. Complements dense retrieval for exact-match terms:
 
 At query time, find the top entities by cosine similarity:
 
-$$\text{linked} = \{e : \hat{\mathbf{v}}_e \cdot \hat{\mathbf{q}} \geq 0.45,\; e \in \text{top-10}\}$$
+$$\text{linked} = \lbrace e : \hat{\mathbf{v}}_e \cdot \hat{\mathbf{q}} \geq 0.45,\; e \in \text{top-10} \rbrace$$
 
 Fallbacks (in order): substring match → section keyword overlap.
 
@@ -226,7 +226,7 @@ After context assembly:
 
 $$q_{\text{quality}} = \frac{|T_q \cap T_c|}{|T_q|}$$
 
-If $q_{\text{quality}} < 0.15$: re-retrieve with k' = min(2k, 20) and hops' = min(hops+1, 3).
+If $\,q_{\text{quality}} < 0.15$: re-retrieve with k' = min(2k, 20) and hops' = min(hops+1, 3).
 
 ---
 
@@ -237,7 +237,7 @@ If $q_{\text{quality}} < 0.15$: re-retrieve with k' = min(2k, 20) and hops' = mi
 
 ### 13.1 Fast-Path Bypass
 
-If $q_{\text{quality}} \geq 0.5$: break, skip critic call entirely.
+If $\,q_{\text{quality}} \geq 0.5$: break, skip critic call entirely.
 
 ### 13.2 Validator (C_val)
 
