@@ -82,7 +82,7 @@ $$N_D(k) = \text{argtop-}D\left\{e : -\|\mathbf{v}_e - \mathbf{c}_k\|^2\right\}$
 
 Assign weights via a Gaussian kernel:
 
-$$H^{\text{sem}}_{e,\, k} = \begin{cases} \exp\!\left(-\dfrac{\|\mathbf{v}_e - \mathbf{c}_k\|^2}{\tau}\right) & e \in N_D(k) \\ 0 & \text{otherwise} \end{cases}$$
+$$H^{\text{sem}}_{e,\, k} = \begin{cases} \exp\left(-\dfrac{\|\mathbf{v}_e - \mathbf{c}_k\|^2}{\tau}\right) & e \in N_D(k) \\ 0 & \text{otherwise} \end{cases}$$
 
 **Interpretation**: entities close to the cluster centroid get high weight; entities at the fringes get exponentially lower weight. $\tau$ controls the falloff — larger $\tau$ gives a flatter distribution, smaller $\tau$ concentrates weight near the centroid.
 
@@ -96,7 +96,7 @@ Given query embedding $\mathbf{q}$ and seed entity scores $\mathbf{a}^{(0)} \in 
 
 For each entity $e$ linked to the query with similarity $s$:
 
-$$a^{(0)}_e = \max\!\left(0,\; \hat{\mathbf{v}}_e \cdot \mathbf{q}\right)$$
+$$a^{(0)}_e = \max\left(0,\; \hat{\mathbf{v}}_e \cdot \mathbf{q}\right)$$
 
 If no entity linking succeeds, fall back to cosine similarity over all entities.
 
@@ -156,7 +156,7 @@ This gives the average diffusion weight of entities in the cluster.
 
 After diffusion, re-score each retrieved chunk $d$ using three terms:
 
-$$S(d) = S_{\text{dense}}(q, d) \;+\; \lambda_1 \sum_{e \in E(d)} \log(1 + w_e) \;+\; \lambda_2 \log\!\left(1 + \sum_{k \in \mathcal{K}(d)} S_{\text{cluster}}(k)\right)$$
+$$S(d) = S_{\text{dense}}(q, d) + \lambda_1 \sum_{e \in E(d)} \log(1 + w_e) + \lambda_2 \log\left(1 + \sum_{k \in \mathcal{K}(d)} S_{\text{cluster}}(k)\right)$$
 
 | Term | Formula | Captures |
 |------|---------|---------|
