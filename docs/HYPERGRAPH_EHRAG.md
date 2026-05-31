@@ -13,8 +13,8 @@ EHRAG builds two complementary hyperedge types over the entity set $E$:
 
 | Type | Hyperedge captures | Dimension |
 |------|-------------------|-----------|
-| **H^str** — structural | Which entities co-occur in the same chunk | $E \times C$ |
-| **H^sem** — semantic | Which entities are semantically similar (same cluster) | $E \times K$ |
+| $H^{\text{str}}$ — structural | Which entities co-occur in the same chunk | $E \times C$ |
+| $H^{\text{sem}}$ — semantic | Which entities are semantically similar (same cluster) | $E \times K$ |
 
 ---
 
@@ -39,7 +39,7 @@ EHRAG builds two complementary hyperedge types over the entity set $E$:
 
 ---
 
-## 3. Structural Hyperedge Matrix H^str
+## 3. Structural Hyperedge Matrix $H^{\text{str}}$
 
 $H^{\text{str}}$ is a binary incidence matrix of shape $E \times C$:
 
@@ -51,7 +51,7 @@ Built from the knowledge graph: for each chunk node, follow outgoing `contains_e
 
 ---
 
-## 4. Semantic Hyperedge Matrix H^sem
+## 4. Semantic Hyperedge Matrix $H^{\text{sem}}$
 
 ### 4.1 BIRCH Clustering
 
@@ -177,9 +177,9 @@ where:
 
 | Operation | Time | Space |
 |-----------|------|-------|
-| Build H^str | $O(E \cdot C_{\text{avg}})$ | $O(\text{nnz}(H^{\text{str}}))$ sparse |
+| Build $H^{\text{str}}$ | $O(E \cdot C_{\text{avg}})$ | $O(\text{nnz}(H^{\text{str}}))$ sparse |
 | BIRCH clustering | $O(E \cdot d \cdot \log K)$ | $O(E \cdot d)$ |
-| Build H^sem | $O(K \cdot E \cdot d)$ | $O(K \cdot D)$ sparse |
+| Build $H^{\text{sem}}$ | $O(K \cdot E \cdot d)$ | $O(K \cdot D)$ sparse |
 | Semantic expansion (Step 1) | $O(\text{nnz}(H^{\text{sem}}))$ | $O(E + K)$ |
 | Structural propagation (Step 2, per iter) | $O(\text{nnz}(H^{\text{str}}) + C)$ | $O(E + C)$ |
 | Topic scoring | $O(\lvert\text{hits}\rvert \cdot C_{\text{avg}})$ | $O(E)$ |
