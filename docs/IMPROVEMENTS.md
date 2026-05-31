@@ -1,70 +1,128 @@
 # STELLAR-RAG v4 — Improvements Log
 
-All improvements are labelled A–H in chronological implementation order.
-Each entry covers: **problem**, **solution**, **mathematical/algorithmic justification**, and **files changed**.
+All improvements are labelled A–I in chronological implementation order.
+Each entry covers: **problem**, **solution**, **justification**, and **files changed**.
 
 ---
 
-## A. Table-Aware OCR Chunking
+## A. PDFExtractor v4 — Article-Boundary Chunking with Merge-Forward
 
-**Files**: `src/pdf_pipeline.py`
+**Files**: `src/pdf_extractor.py`
 
 ### Problem
 
-University documents are rich in structured tables: grade conversion tables, fee schedules, credit requirement tables. EasyOCR's default `paragraph=True` mode reads multi-column tables column-by-column, destroying row semantics:
+The v1/v2 chunking strategy used a fixed sliding window (chunk_size=750 chars, overlap=120 chars). This produced:
 
-```
-Before (column-by-column):
-  "9.0-10 8.0-9 7.0-8 ..."   ← all left-column grades
-  "A+ A B+ ..."               ← all centre-column letters
-  "4.0 3.5 3.0 ..."           ← all right-column points
-
-After (row-by-row):
-  "9.0-10.0 | A+ | 4.0"
-  "8.0-<9.0 | A  | 3.5"
-  ...
-```
-
-When the grade table is chunked by sliding window (character-level), the chunk boundary may split the table mid-row, producing incomplete rows that are meaningless for Q&A.
+- Repeated article headers at chunk boundaries ("Điều 15. Điều kiện tốt nghiệp" appearing in multiple consecutive chunks)
+- Short orphan chunks (single-sentence articles) that embed poorly
+- Variable chunk quality depending on where the 750-char boundary fell relative to article structure
 
 ### Solution
 
-**Layout-aware OCR** (`_ocr_image`):
-1. Use EasyOCR `detail=1` to get per-token bounding boxes `(bbox, text, conf)`.
-2. **Row clustering**: sort tokens by y-centre ($\text{cy} = (\max y + \min y) / 2$). Cluster into rows: tokens with $|cy_i - cy_{\text{row}_0}| \leq \text{row\_tol}$ belong to the same row.
+**PDFExtractor v4** implements a four-stage pipeline:
 
-   Adaptive tolerance:
+1. **Article-boundary split**: detect `Điều X.` headings and split on article boundaries first. Each article becomes one or more logical units.
+2. **Merge-forward** (TARGET=600 chars): iteratively merge short chunks forward into the next chunk until the target size is reached. Prevents orphan single-sentence chunks.
+3. **Seam overlap**: append the first 2 sentences of the next chunk to the end of each chunk. Preserves context across boundaries without duplicating full chunks.
+4. **OCR normalisation**: strip pipe artefacts (`"năng | lực"` → `"năng lực"`), join soft line breaks (`"cho\ncác"` → `"cho các"`), remove EasyOCR noise tokens.
 
-   $$\text{row\_tol} = \max(0.6 \cdot \text{median\_height}, 8.0) \text{ px}$$
-
-3. **Table detection**: if ≥ 40% of rows have ≥ 2 cells, declare `table_mode`.
-4. In table mode, join cells with `" | "` separator.
-
-**Table-aware chunking** (`_split_text` → `_split_table`):
-- If ≥ 35% of lines contain `" | "`: table chunk mode.
-- Whole table ≤ $3 \times \text{chunk\_size}$: single chunk (preserves structure).
-- Large table: split at row boundaries; prepend header row to every continuation chunk.
-
-  ```
-  Chunk 0:  row_0 (header)
-            row_1
-            row_2
-  Chunk 1:  row_0 (header)  ← re-prepended for self-contained context
-            row_3
-            row_4
-  ```
-
-**Why row-boundary split is better than character-level**: a 500-char split that lands mid-row produces a truncated row with no header context. A row-boundary split with header repetition ensures every chunk is self-contained and interpretable.
+**Why merge-forward beats sliding window**: sliding window cuts at fixed character offsets, often splitting mid-sentence. Merge-forward respects natural article and sentence boundaries, producing semantically complete chunks that embed into more distinct, meaningful vectors.
 
 ---
 
-## B. HybGRAG Critic Fast-Path
+## B. BAAI/bge-m3 Embedding Model
 
-**Files**: `src/agent.py` (`_retrieve_with_critic`), `src/config.py`
+**Files**: `src/config.py`, `src/embedding.py`, `src/graphrag.py`
 
 ### Problem
 
-The HybGRAG critic runs a Validator LLM call (50–150 ms) at every iteration, even when the retrieved context already clearly covers the query. For simple factual lookups ("học phí học kỳ 2 là bao nhiêu?"), the first retrieval typically returns highly relevant chunks, but the critic still runs 1–3 iterations wastefully.
+The previous default was `nomic-embed-text` (768-dim, English-focused) via Ollama HTTP. For Vietnamese legal text, this produced:
+
+- Poor handling of diacritics and compound Vietnamese words
+- 768-dim vectors — lower capacity for semantic distinctions in a large corpus
+- Per-request Ollama HTTP overhead (10–50 ms per batch element)
+
+### Solution
+
+Switch to `BAAI/bge-m3` via `sentence_transformers`:
+
+| Property | nomic-embed-text | BAAI/bge-m3 |
+|----------|-----------------|-------------|
+| Dimension | 768 | **1024** |
+| Languages | English-centric | **100+ languages** |
+| Vietnamese quality | Poor | **Strong** |
+| Backend | Ollama HTTP | **Local PyTorch** |
+| Batch size | Sequential HTTP | **Configurable (default 4)** |
+
+**Batch size 4** (vs previous 64): prevents OOM on machines with limited VRAM when encoding 641+ chunks during ingest. Each bge-m3 batch at 1024-dim requires ~200 MB GPU memory at batch_size=4.
+
+**Dimension mismatch guard** in `GraphRAG.load()`: if the stored FAISS index dimension differs from the current embedder dimension, raises a clear error instead of a silent FAISS shape crash.
+
+**Re-ingest required** when switching models: changing from 768-dim to 1024-dim invalidates all stored FAISS indices and `entity_vecs.npy`.
+
+---
+
+## C. Cloud LLM Integration (Dual-Answer + Graph Extraction)
+
+**Files**: `src/llm_client.py`, `src/cloud_llm_client.py`, `src/agent.py`, `ingest.py`
+
+### Problem
+
+The system was Ollama-only. Graph extraction used Gemini (a separate API client with different auth, rate limiting, and error handling). There was no way to compare Ollama answers against a larger cloud model.
+
+### Solution
+
+**Unified LLM client** (`llm_client.py`) supporting three backends via a single `.chat()` / `.chat_dual()` interface:
+
+- `ollama`: local Ollama only (default, no API key required)
+- `cloud`: Cloud LLM only (Groq / DeepSeek / OpenRouter via OpenAI-compatible API)
+- `both`: Ollama primary, Cloud fallback on failure
+
+**Dual-answer mode** (`answer_dual()`): calls Ollama and Cloud LLM in parallel via `ThreadPoolExecutor`, using the same retrieved context. Both answers are shown side-by-side in the terminal.
+
+**Cloud graph extraction**: `ingest.py` now uses `CloudLLMClient` (Groq `llama-3.1-8b-instant`) for knowledge graph extraction, replacing the Gemini client. Key optimisation: **group chunks by article** before calling the LLM — 641 individual chunks become ~60–80 article groups, reducing LLM calls by 8–12×.
+
+**TPM guard**: 5s minimum gap between calls + exponential back-off on 429. At 5s gap: 12 calls/min × 700 tokens ≈ 8400 TPM, well within Groq's 30K TPM free tier for `llama-3.1-8b-instant`.
+
+---
+
+## D. HybGRAG Critic Loop
+
+**Files**: `src/agent.py` (`_retrieve_with_critic`), `src/critic.py`, `src/config.py`
+
+### Problem
+
+Single-pass retrieval sometimes returned insufficient context, especially for queries spanning multiple articles or requiring cross-reference reasoning. Without validation, the LLM would produce a low-quality answer silently.
+
+### Solution
+
+**HybGRAG critic loop** (paper: arXiv 2412.16311): up to 3 retrieval-refinement iterations.
+
+**Validator (C_val)**: fast LLM (`qwen2.5:0.5b`, temperature 0, max 8 tokens) answers YES/NO: "Does the context contain sufficient information?" YES → proceed. NO → trigger Commenter.
+
+**Commenter (C_com)**: structured single-line feedback:
+
+```
+Thiếu thực thể: [entity/concept name]
+Thiếu điều khoản: [article reference]
+Thiếu bảng số liệu: [table name]
+```
+
+Structured output (not narrative) ensures the feedback terms serve as effective additional query tokens.
+
+**Query enrichment**: `enriched = f"{original_query} [Cần thêm: {feedback}]"` — used in the next iteration's retrieval.
+
+**Verbalized paths**: graph relation paths are passed to the validator for richer evidence beyond raw chunk text.
+
+---
+
+## E. HybGRAG Critic Fast-Path
+
+**Files**: `src/agent.py` (`_retrieve_with_critic`)
+
+### Problem
+
+The critic validator runs a 50–150 ms LLM call on every iteration, even when the retrieved context already clearly covers the query.
 
 ### Solution
 
@@ -72,262 +130,130 @@ Before calling the LLM validator, compute the Self-RAG quality score:
 
 $$q = \frac{|T_q \cap T_c|}{|T_q|}$$
 
-If $q \geq \theta_{\text{skip}} = 0.5$: skip the validator entirely and break the loop.
+If $q \geq 0.5$: skip the validator entirely and break the loop.
 
-**Threshold reasoning**: $q = 0.5$ means half of the query's significant tokens (≥3 chars) appear in the context. For a factual query, this is strong evidence that the correct document was retrieved. The LLM validator would almost certainly return YES, so we save the call.
+The three quality regions:
 
-**Interaction with Self-RAG expansion**: the expansion threshold is $\theta_{\text{expand}} = 0.15$. The two thresholds bracket the quality space:
+| Quality | Action |
+|---------|--------|
+| q < 0.15 | Expand retrieval (more k, more hops) |
+| 0.15 ≤ q < 0.5 | Run critic as normal |
+| q ≥ 0.5 | Skip critic, proceed to generation |
 
-| Quality range | Action |
-|---------------|--------|
-| $q < 0.15$ | Expand retrieval (more k, more hops) |
-| $0.15 \leq q < 0.5$ | Run critic as normal |
-| $q \geq 0.5$ | Skip critic, proceed to generation |
+**Savings**: for simple factual queries, this avoids 2–3 unnecessary critic iterations (100–450 ms total).
 
 ---
 
-## C. Route-Before-Expand and Simple-Query Bypass
+## F. EHRAG Hypergraph Integration
 
-**Files**: `src/agent.py` (`answer`, `answer_stream`)
+**Files**: `src/hypergraph.py`, `src/graphrag.py` (`_build_hypergraph`, `_hypergraph_rescore`)
 
 ### Problem
 
-In the original pipeline order:
-1. `QueryProcessor.process()` (potentially LLM)
-2. `QueryExpander.expand()` (LLM, ~200 ms)
-3. `QueryRouter.classify()` (fast heuristic)
-
-For simple factual queries, expansion ran before routing, wasting LLM calls on queries that the router would classify as `simple` anyway.
+Standard knowledge-graph PPR traversal captures pairwise entity relations but misses **multi-way** co-occurrence: e.g., an exam regulation that simultaneously involves multiple rules, student statuses, and deadlines. Single-edge traversal loses this grouping.
 
 ### Solution
 
-New pipeline order:
-1. `QueryProcessor.process()` (fast heuristic path for most queries)
-2. `QueryRouter.classify()` → `complexity`
-3. `QueryExpander.expand()` **only if** `complexity != 'simple'`
+EHRAG (paper: arXiv 2604.17458) builds two complementary hyperedge matrices:
 
-For `complexity == 'simple'`, expansion is guaranteed to be skipped.
+- **H^str** (E×C): binary incidence — entity e appears in chunk c. Captures structural co-occurrence.
+- **H^sem** (E×K): BIRCH-clustered Gaussian weights — entity e is semantically close to cluster k centroid. Captures semantic similarity.
 
-**Why it works**: the router's heuristics (word count, entity count, conjunction/analytical keyword presence) are cheap string operations. They can reliably identify single-entity factual lookups before incurring LLM expansion cost.
+**Diffusion** starts from seed entity scores (linked from the query), propagates through H^str (structural) and H^sem (semantic), and produces `entity_weights` and `cluster_scores`.
 
----
+**Topic scoring**: final chunk score `S(d) = S_dense + λ1 * entity_evidence + λ2 * cluster_term`.
 
-## D. HyDE Analytical Gating
-
-**Files**: `src/agent.py` (`_should_hyde`)
-
-### Problem
-
-HyDE was originally triggered for all `complexity == 'complex'` queries. For factual table lookups that happen to be complex (e.g., "Điều 15 quy định gì về điều kiện tốt nghiệp?"), HyDE generates a narrative passage that does not match the document's structured list/table format. This pushes the dense query vector toward the wrong chunks, *hurting* recall.
-
-### Solution
-
-Gate HyDE on analytical intent, not just complexity:
-
-```python
-def _should_hyde(question: str, complexity: str) -> bool:
-    if complexity != "complex":
-        return False
-    q_norm = unaccent(question)
-    if any(kw in q_norm for kw in _HYDE_ANALYTICAL_KW):
-        return True
-    return len(question.split()) >= 25
-```
-
-Analytical keywords: *tại sao, vì sao, giải thích, so sánh, tổng hợp, phân tích, tại sao, why, how, explain, compare, summarize, analyze, describe, impact, cause, effect, …*
-
-**Rationale**: HyDE helps when the answer is a paragraph of connected prose (analytical queries). It hurts when the answer is a specific number, table row, or article reference (factual lookups), because:
-
-$$\text{HyDE}(d) = \text{Embed}(q \oplus g_\theta(q))$$
-
-For a factual lookup, $g_\theta(q)$ generates prose that moves $\text{Embed}(q \oplus g_\theta(q))$ away from the sparse, structured chunk containing the actual answer.
+Fails open: any exception returns the original hit list unchanged, so retrieval always continues.
 
 ---
 
-## E. Reranker Enabled by Default
-
-**Files**: `src/config.py`
-
-### Problem
-
-`RERANKER_ENABLED` defaulted to `false`. The cross-encoder (`ms-marco-MiniLM-L-6-v2`, ≈22 MB) provides significant reranking quality improvement — especially when QDAP-S fusion is uncalibrated (untrained weights, $\alpha = 0.5$). Leaving it off by default meant users got worse results unless they explicitly enabled it.
-
-### Solution
-
-Changed default: `RERANKER_ENABLED = "true"`.
-
-The reranker is **lazy-loaded** (only at first use) and is a singleton — no cold-start cost on repeated queries. It scores the top `reranker_top_k = 20` fused candidates jointly as `(query, document)` pairs.
-
-**Cost analysis**: 20 CE forward passes × ~5 ms each = ~100 ms per query on CPU. On GPU: ~10–20 ms total. This is justified by the recall improvement, especially for queries where BM25 and dense disagree.
-
----
-
-## F. HNSWFlat Auto-Selection for FAISS
-
-**Files**: `src/vector_store.py`
-
-### Problem
-
-The original code used `IndexFlatIP` (exact brute-force), which is $O(n \cdot d)$ per query. For a corpus of 10,000 chunks at 1024 dimensions, each query requires $10{,}000 \times 1024 = 10^7$ multiply-accumulates. This is acceptable for small corpora but scales poorly.
-
-### Solution
-
-Auto-select index type by corpus size:
-
-$$\text{index} = \begin{cases} \text{IndexFlatIP} & n < 500 \quad \text{(exact, zero build time)} \\ \text{IndexHNSWFlat}_{M=32} & n \geq 500 \quad \text{(approximate, sub-linear query)} \end{cases}$$
-
-**HNSW algorithm**: Hierarchical Navigable Small World graphs organise vectors into a multi-layer proximity graph. Query complexity: $O(d \cdot \log n)$ instead of $O(n \cdot d)$.
-
-**Parameters chosen**:
-- $M = 32$: each node connected to 32 neighbours per layer. Higher M → better recall, more memory.
-- `efConstruction = 200`: build-time beam width. Higher → better graph quality, slower build.
-- `efSearch = 64`: query-time beam width. efSearch=64 achieves ≥99% recall@10 for typical corpora.
-
-**Inner product metric**: since all vectors are L2-normalised, inner product equals cosine similarity. `faiss.METRIC_INNER_PRODUCT` is correct here.
-
-**Threshold rationale**: at $n < 500$, HNSW build overhead ($O(n \cdot M \cdot d)$) exceeds the savings from approximate search. FlatIP is always correct and fast enough for small corpora.
-
----
-
-## G. BAAI/bge-m3 Embedding Model
-
-**Files**: `src/config.py`, `src/embedding.py`, `src/graphrag.py`
-
-### Problem
-
-The default embedding model was `nomic-embed-text` via the Ollama backend:
-- **768-dim** output — lower capacity for fine-grained semantic distinctions.
-- English-focused pre-training — poor handling of Vietnamese diacritics and domain vocabulary.
-- Parallel HTTP requests to Ollama add ~10–50 ms overhead per batch element.
-
-### Solution
-
-Switch to `BAAI/bge-m3` via `sentence_transformers` backend:
-
-| Property | nomic-embed-text | BAAI/bge-m3 |
-|----------|-----------------|-------------|
-| Dimension $d$ | 768 | **1024** |
-| Languages | English-centric | **100+ languages** |
-| Vietnamese quality | Poor | **Strong** |
-| Backend | Ollama HTTP | **Local PyTorch (GPU)** |
-| Batch size | Sequential HTTP | **32 (configurable)** |
-
-**Dimension mismatch guard** added to `GraphRAG.load()`:
-
-```python
-faiss_dim = self.vector.index.d
-embed_dim  = self.embedder.embed_dim
-if faiss_dim != embed_dim:
-    raise RuntimeError(
-        f"Dimension mismatch: stored={faiss_dim}, current={embed_dim}. "
-        f"Run: python ingest.py"
-    )
-```
-
-This prevents a silent FAISS shape error when switching models.
-
-**`embed_dim` property** added to `Embedder`:
-- ST backend: `model.get_sentence_embedding_dimension()` (instant, reads model config).
-- Ollama backend: lazy single-call cache (needed for compatibility mode).
-
-**Batch size fix**: `_encode_st` had hardcoded `batch_size=64`; changed to `settings.embed_batch_size` (default 32) so GPU memory usage is configurable.
-
-**Re-ingest required**: changing $d$ from 768 to 1024 invalidates all stored FAISS indices and `entity_vecs.npy`. Run `python ingest.py` once after switching.
-
----
-
-## H. QDAP-S Online Learning from User Ratings
+## G. QDAP-S Online Learning from User Ratings
 
 **Files**: `src/qdap.py`, `src/graphrag.py`, `src/agent.py`, `app.py`
 
 ### Problem
 
-QDAP-S initialises with $W = 0$, $\mathbf{b} = 0$, producing $\alpha = 0.5$ (balanced blend) for every query. Without training data, the predictor never adapts to the query distribution. Offline training requires labelled query–document relevance pairs, which are expensive to collect.
+QDAP-S initialises with zero weights, producing α=0.5 (equal dense/sparse blend) for every query. Without training data it never adapts.
 
 ### Solution
 
-Online REINFORCE updates from implicit user feedback (1–5 star ratings) collected through the chat interface.
+Online REINFORCE updates from user ratings (1–5 stars) collected through the chat interface.
 
-**Reward mapping**:
+**Reward mapping**: `r = (rating - 3) / 2.0` → range [-1, +1]. Rating 3 (neutral) → no update.
 
-$$r = \frac{\text{rating} - 3}{2} \in \{-1.0,\; -0.5,\; 0.0,\; +0.5,\; +1.0\}$$
+**State persistence**: `_last_qv` and `_last_qdap_alpha` stored in `GraphRAG` after every `_qdap_fuse()` call, written to `storage/qdap_s.npz` after each update.
 
-- Rating 5 → $r = +1.0$: the answer was perfect — reinforce the $\alpha$ that was used.
-- Rating 3 → $r = 0$: neutral — no update.
-- Rating 1 → $r = -1.0$: the answer was wrong — push $\alpha$ toward the neutral baseline 0.5.
-
-**REINFORCE update** (see [MATH_FOUNDATIONS.md §5](MATH_FOUNDATIONS.md)):
+**REINFORCE update**:
 
 $$W \leftarrow W + \eta \, |r| \, (\mathbf{1}_{\text{bin}^*} - \mathbf{p}) \otimes \mathbf{e}$$
-$$\mathbf{b} \leftarrow \mathbf{b} + \eta \, |r| \, (\mathbf{1}_{\text{bin}^*} - \mathbf{p})$$
 
-**State persistence**: `_last_qv` and `_last_qdap_alpha` stored in `GraphRAG` after every `_qdap_fuse()` call. On rating, passed directly to `update_online()`.
+Over time:
 
-**Persistence**: after every update, weights are saved to `storage/qdap_s.npz`. The model resumes from the last checkpoint on restart.
-
-**Data flow**:
-
-```
-app.py: rating input
-    │
-    ▼
-qdap_reward = (int(rating) - 3) / 2.0
-    │
-    ▼
-Agent.update_qdap_feedback(reward)
-    │
-    ▼
-GraphRAG.update_qdap_online(reward)
-    │  uses: self._last_qv, self._last_qdap_alpha
-    │
-    ▼
-QDAPSmall.update_online(query_embedding, alpha_used, reward)
-    │
-    ▼
-save to storage/qdap_s.npz
-```
-
-**Learning dynamics**: initially $\alpha = 0.5$ for all queries. After sufficient ratings:
-- Factual exact-match queries that score well → reinforce low $\alpha$ (lean BM25).
-- Analytical/paraphrase queries that score well → reinforce high $\alpha$ (lean dense).
-- The distribution $\mathbf{p}$ shifts over time to produce query-appropriate $\alpha$ values.
+- Factual exact-match queries rated well → reinforce low α (lean BM25)
+- Analytical/paraphrase queries rated well → reinforce high α (lean dense)
 
 ---
 
-## Earlier-Session Improvements (Root-Cause Fixes)
+## H. HNSWFlat Auto-Selection for FAISS
 
-### Fix I — Graduation Ranking Table in System Prompt
+**Files**: `src/vector_store.py`
 
-**Problem**: The LLM was using the per-course grade conversion table (9.0 → A+) to answer graduation ranking queries (9.0 → "Xuất sắc"), producing wrong classifications.
+### Problem
 
-**Solution**: Added two separate, labelled tables to `SYSTEM_PROMPT` with explicit cross-table prohibition:
-- `[BẢNG ĐIỂM HỌC PHẦN]` — per-course only, with warning: "KHÔNG dùng bảng này cho xếp loại tốt nghiệp"
-- `[XẾP LOẠI TỐT NGHIỆP]` — graduation ranking, with example: "điểm TB 6.5 → [6.0, 7.0) → Trung bình khá"
+`IndexFlatIP` (exact brute-force) is O(n·d) per query. For 10,000 chunks at 1024 dimensions: 10M multiply-accumulates per query. Acceptable for small corpora but scales poorly.
 
-### Fix II — Natural Reasoning Instruction
+### Solution
 
-**Problem**: Answers were formulaic ("Theo tài liệu, Điều 15 quy định...") and refused to reason even when the answer was derivable from context.
+Auto-select index type by corpus size:
 
-**Solution**: Added principle to `SYSTEM_PROMPT`: "Suy luận từ tài liệu — ĐỪNG nói 'không tìm thấy' khi thông tin ĐÃ CÓ."
+- n < 500: `IndexFlatIP` (exact, zero build time)
+- n ≥ 500: `IndexHNSWFlat` M=32, efConstruction=200, efSearch=64 (approximate, O(d·log n))
 
-### Fix III — Structured Critic Commenter Output
+Parameters: M=32 (each node connected to 32 neighbours), efSearch=64 achieves ≥99% recall@10 for typical corpora.
 
-**Problem**: The Commenter LLM would respond with long narrative explanations ("Dựa trên ngữ cảnh hiện tại, tôi nhận thấy rằng...") that were appended as search terms, producing poor expanded queries.
 
-**Solution**: Rewrote `COMMENTER_PROMPT` to force single-line structured output:
-```
-Thiếu thực thể: [specific name]
-Thiếu điều khoản: [article/decision]
-Thiếu bảng số liệu: [table name]
-```
+## I. NER Pre-Pass + LLaMA 70B Relation Extraction
 
-### Fix IV — O(1) Entity Name Lookup
+**Files**: `src/ner_extractor.py` (new), `ingest.py`, `src/config.py`, `src/cloud_llm_client.py`
 
-**Problem**: `_hypergraph_rescore()` called `{n: i for i, n in enumerate(self.entity_names)}` on every query — O(E) dict construction per retrieval for E entities.
+### Problem
 
-**Solution**: Build `_entity_name_to_idx: dict[str, int]` once at `_build_entity_index()` and `load()`. Query-time lookup is O(1).
+The original graph extraction called an LLM (llama-3.1-8b-instant) to extract **both** entities and relations in one prompt. This had two weaknesses:
 
-**Savings**: for E = 5000 entities and 10 queries/minute, this avoids building 50,000 dict entries/minute, recovering ~5 ms per query.
+1. **Token cost**: every call spent ~50% of tokens just listing entities that a local NER model could find for free.
+2. **Entity quality**: small 8B models frequently hallucinate entity names or miss domain-specific items (article numbers, credit counts) that simple regex catches reliably.
+
+### Solution
+
+Two-stage pipeline in `_build_graph_ner_llm()`:
+
+**Stage 1 — NER pre-pass (local, no API)**
+- Model: `NlpHUST/ner-vietnamese-electra-base` (~270 MB, CPU-only)
+- Extracts `PER / ORG / LOC / MISC` entities from every chunk
+- Domain regex always runs alongside: catches `QUANTITY` ("120 tín chỉ") and `ARTICLE` ("Điều 15") with 100% recall
+- Model is unloaded after the pass — frees ~400 MB before the cloud LLM phase
+
+**Stage 2 — LLM relation extraction (cloud, LLaMA 70B)**
+- Model: `llama-3.3-70b-versatile` on Groq
+- Receives the known entity list; prompt asks for **relations only**
+- Token budget per call: ~500 tokens (vs ~1000 tokens previously)
+- Rate limits enforced: `min_gap=8s`, `max_rpm=7` — safely within 6,000 TPM free-tier quota
+
+### Justification
+
+| Metric | Before (8B, entity+relation) | After (NER + 70B relation-only) |
+|--------|------------------------------|----------------------------------|
+| Tokens per call | ~1,000 | ~500 (-50%) |
+| Entity accuracy | LLM-dependent | NER + regex (higher recall for numbers/articles) |
+| LLM model | 8B | 70B (higher relation quality) |
+| Risk of 429 blocks | Higher (more tokens) | Lower (fewer tokens, hard rate guard) |
+| Memory overhead | None (no local model) | ~400 MB during NER, then freed |
+
+### Backward compatibility
+
+- `python ingest.py --no-ner` → original 8B entity+relation mode
+- `python ingest.py --skip-graph` → fast regex-only NER (no cloud API)
+- `NER_ENABLED=false` in `.env` → same as `--no-ner`
 
 ---
 
@@ -335,15 +261,16 @@ Thiếu bảng số liệu: [table name]
 
 | ID | Change | Latency impact | Accuracy impact |
 |----|--------|----------------|-----------------|
-| A | Table-aware OCR chunking | Ingest +10% | Retrieval for table queries: large gain |
-| B | Critic fast-path | Query −100–300 ms for high-quality contexts | Neutral (critic was saying YES anyway) |
-| C | Route-before-expand + simple bypass | Query −200 ms for simple queries | Neutral |
-| D | HyDE analytical gating | Query −300 ms for factual complex queries | Accuracy gain (no misleading HyDE) |
-| E | Reranker default on | Query +100 ms | Accuracy gain across all queries |
-| F | HNSWFlat auto-select | Query −5–50 ms for large corpora | Negligible (≥99% recall) |
-| G | BAAI/bge-m3 (1024-dim, multilingual) | Ingest slower (larger model) | Large gain for Vietnamese queries |
-| H | QDAP-S online learning | Rating +5 ms | Improves α over time from feedback |
-| I | Graduation ranking table | — | Eliminates wrong graduation classification |
-| II | Natural reasoning instruction | — | Eliminates robotic hedging |
-| III | Structured commenter output | Critic loop faster | Critic feedback produces better enriched queries |
-| IV | O(1) entity dict cache | Query −5 ms | Neutral |
+| A | PDFExtractor v4 (article-boundary + merge-forward) | Ingest only | Large gain for article-boundary queries |
+| B | BAAI/bge-m3 (1024-dim, multilingual) | Ingest slower | Large gain for Vietnamese queries |
+| C | Cloud LLM (dual mode + cloud graph extraction) | Dual: +parallel | Enables 70B model comparison |
+| D | HybGRAG Critic loop | Query +50–300 ms | Accuracy gain for multi-article queries |
+| E | Critic fast-path (Self-RAG skip) | Query -100–450 ms | Neutral (critic was saying YES anyway) |
+| F | EHRAG hypergraph integration | Query +20–50 ms | Topic-aware entity evidence scoring |
+| G | QDAP-S online learning | Rating +5 ms | Improves α over time from feedback |
+| H | HNSWFlat auto-select | Query -5–50 ms | Negligible (≥99% recall) |
+| I | NER pre-pass + LLaMA 70B relation extraction | Ingest same/faster | Higher entity recall, better relation labels |
+| Fix-I | Graduation ranking table in prompt | — | Eliminates wrong graduation classification |
+| Fix-II | Natural reasoning instruction | — | Eliminates robotic hedging |
+| Fix-III | Structured commenter output | Critic loop faster | Better enriched queries |
+| Fix-IV | O(1) entity dict cache | Query -5 ms | Neutral |

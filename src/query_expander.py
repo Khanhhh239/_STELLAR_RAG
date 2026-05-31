@@ -12,7 +12,7 @@ with a lightweight Ollama LLM call.  The model:
   - Works for any new abbreviation or term without code changes.
 
 Fail-open design
-----------------
+
 When Ollama is unavailable or returns unparseable output, the expander
 returns only the original query — retrieval quality degrades gracefully
 without crashing.
@@ -45,11 +45,9 @@ if TYPE_CHECKING:
 
 from config import settings
 
-
 def _nfc(text: str) -> str:
     """NFC-normalise text for consistent code-point representation."""
     return unicodedata.normalize("NFC", text)
-
 
 class LLMQueryExpander:
     """
@@ -74,17 +72,22 @@ class LLMQueryExpander:
     """
 
     _PROMPT_TEMPLATE: str = (
-        "Bạn là chuyên gia ngôn ngữ Việt Nam cho hệ thống hỏi đáp đại học.\n\n"
+        "Bạn là chuyên gia ngôn ngữ Việt Nam cho hệ thống hỏi đáp về quy chế đào tạo đại học.\n\n"
         "Sinh ra TỐI ĐA 2 biến thể diễn đạt khác cho câu hỏi dưới đây.\n"
         "Yêu cầu mỗi biến thể:\n"
         "  - Giữ nguyên ý nghĩa và phạm vi câu hỏi gốc\n"
-        "  - Dùng từ ngữ / cách diễn đạt khác: mở rộng viết tắt, từ đồng nghĩa, diễn đạt lại\n"
-        "  - Ngắn gọn, không thêm thông tin mới\n"
-        "  - Phù hợp ngữ cảnh đại học Việt Nam\n\n"
+        "  - ƯU TIÊN dùng ngôn ngữ văn bản quy chế/pháp lý (không phải ngôn ngữ thường)\n"
+        "    Ví dụ: 'không đi học' → 'không tham gia học phần đã đăng ký'\n"
+        "           'bỏ học' → 'tự ý bỏ học'\n"
+        "           'bị đuổi' → 'buộc thôi học'\n"
+        "           'rớt môn' → 'không đạt học phần'\n"
+        "           'thi lại' → 'thi kết thúc học phần lần hai'\n"
+        "  - Mở rộng viết tắt nếu có (GPA → điểm trung bình tích lũy, CNTT → công nghệ thông tin)\n"
+        "  - Ngắn gọn, không thêm thông tin mới\n\n"
         'Câu hỏi gốc: "{query}"\n\n'
         "Trả về JSON thuần túy (không giải thích, không markdown):\n"
         '{{"variants": ["biến thể 1", "biến thể 2"]}}\n\n'
-        "Nếu không có biến thể phù hợp hoặc câu hỏi đã đủ rõ:\n"
+        "Nếu không có biến thể phù hợp:\n"
         '{{"variants": []}}'
     )
 
@@ -128,7 +131,7 @@ class LLMQueryExpander:
             )
             raw = resp["message"]["content"].strip()
 
-            # ── Parse JSON (model may add prose, backticks, or extra spaces) ──
+            # Parse JSON (model may add prose, backticks, or extra spaces)
             m = re.search(r'\{[^{}]*"variants"\s*:\s*\[[^\]]*\][^{}]*\}', raw, re.S)
             if not m:
                 m = re.search(r'\{.*\}', raw, re.S)
@@ -148,7 +151,6 @@ class LLMQueryExpander:
         except Exception:
             # Any error (network, JSON parse, model unavailable) → fail-open
             return [base]
-
 
 # Public alias — backward-compatible name used throughout the codebase
 QueryExpander = LLMQueryExpander

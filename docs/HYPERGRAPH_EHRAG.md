@@ -182,7 +182,7 @@ where:
 | Build H^sem | $O(K \cdot E \cdot d)$ | $O(K \cdot D)$ sparse |
 | Semantic expansion (Step 1) | $O(\text{nnz}(H^{\text{sem}}))$ | $O(E + K)$ |
 | Structural propagation (Step 2, per iter) | $O(\text{nnz}(H^{\text{str}}) + C)$ | $O(E + C)$ |
-| Topic scoring | $O(|\text{hits}| \cdot C_{\text{avg}})$ | $O(E)$ |
+| Topic scoring | $O(\lvert\text{hits}\rvert \cdot C_{\text{avg}})$ | $O(E)$ |
 
 All matrix multiplications use scipy sparse routines (CSR format), avoiding dense $E \times C$ materialisation. This keeps memory below ~100 MB for typical university corpora ($E \approx 5000$, $C \approx 10000$).
 

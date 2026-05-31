@@ -46,7 +46,6 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-
 class Critic:
     """
     HybGRAG Critic — validator + commenter for agentic retrieval refinement.
@@ -59,7 +58,7 @@ class Critic:
             enriched = critic.enrich_query(original_query, feedback)
     """
 
-    # ── Vietnamese validator prompt ─────────────────────────────────────────
+    # Vietnamese validator prompt
     VALIDATOR_PROMPT: str = (
         "Bạn là hệ thống đánh giá chất lượng ngữ cảnh cho hệ thống hỏi đáp.\n\n"
         "Nhiệm vụ: Đánh giá xem ngữ cảnh được cung cấp có ĐỦ để trả lời câu hỏi không.\n\n"
@@ -77,7 +76,7 @@ class Critic:
         "Chỉ trả lời đúng 1 từ (YES / NO), không giải thích:"
     )
 
-    # ── Vietnamese commenter prompt ─────────────────────────────────────────
+    # Vietnamese commenter prompt
     # Forced single-line structured output so the enriched query contains
     # concrete retrieval terms instead of narrative explanation.
     COMMENTER_PROMPT: str = (
@@ -109,9 +108,7 @@ class Critic:
         self.client = client
         self.model  = model or settings.critic_model
 
-    # ------------------------------------------------------------------
     # Validator
-    # ------------------------------------------------------------------
 
     def validate(
         self,
@@ -175,9 +172,7 @@ class Critic:
             logger.debug(f"[Critic] validate() error: {exc}")
             return True   # fail-open
 
-    # ------------------------------------------------------------------
     # Commenter
-    # ------------------------------------------------------------------
 
     def comment(
         self,
@@ -209,15 +204,26 @@ class Critic:
                 options={"temperature": 0.2, "num_predict": 120},
             )
             feedback = resp["message"]["content"].strip()
+
+            # Strict format validation — must start with one of the template prefixes.
+            # If the small model hallucinates free text, discard it entirely so
+            # garbage feedback never contaminates the retrieval context.
+            _VALID_PREFIXES = (
+                "Thiếu thực thể:",
+                "Thiếu điều khoản:",
+                "Thiếu bảng số liệu:",
+            )
+            if not any(feedback.startswith(p) for p in _VALID_PREFIXES):
+                logger.debug(f"[Critic] commenter output rejected (bad format): {feedback[:80]!r}")
+                return ""
+
             return feedback
 
         except Exception as exc:
             logger.debug(f"[Critic] comment() error: {exc}")
             return ""
 
-    # ------------------------------------------------------------------
     # Query enrichment
-    # ------------------------------------------------------------------
 
     @staticmethod
     def enrich_query(original_query: str, feedback: str) -> str:

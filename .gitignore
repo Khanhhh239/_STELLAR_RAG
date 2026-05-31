@@ -1,21 +1,63 @@
-# Python/runtime
-.venv/
+# ===== Python =====
 __pycache__/
 *.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.ipynb_checkpoints/
 
-# Local secrets
+# ===== Virtual environments =====
+venv/
+.venv/
+env/
+ENV/
+
+# ===== Secrets =====
 .env
+.env.local
+*.key
 
-# Generated data and indexes
-data/processed/
-data/raw/*.pdf
+# ===== Storage / runtime artefacts (rebuilt by ingest.py) =====
 storage/
+*.faiss
+*.npy
+*.pkl
+*.graphml
+*.sqlite
+*.sqlite3
+*.npz
 
-# Logs and local OS/editor files
+# ===== Models / weights =====
+*.pt
+*.pth
+*.onnx
+*.bin
+*.safetensors
+*.gguf
+
+# ===== Data (input PDFs + processed chunks) =====
+data/raw/*.pdf
+data/processed/*.json
+data/processed/*.txt
+
+# ===== Eval outputs =====
+eval/results/*.json
+eval/results/*.csv
+eval/eval_report.json
+eval/eval_log.txt
+eval/rlhf_exports/
+
+# ===== Logs =====
 *.log
+
+# ===== OS / IDE =====
 .DS_Store
 Thumbs.db
-
-# Evaluation outputs
-eval_report.json
-eval_log.txt
+.idea/
+.vscode/
+*~
+*.swp

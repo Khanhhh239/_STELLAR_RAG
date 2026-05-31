@@ -1,11 +1,10 @@
 """
 QDAP-S — Query-Distribution Adaptive Predictor (Small variant)
-==============================================================
 From: "Query-Adaptive Hybrid Search" (make-08-00091-v3)
       Section 3.2 — QDAP architecture
 
 Architecture
-─────────────
+
     query_embedding(d)
         │
         ▼
@@ -27,12 +26,12 @@ Architecture
 α → 1 : lean dense/semantic (conceptual, paraphrased queries)
 
 Untrained defaults
-──────────────────
+
 Zero linear weights → uniform logits → uniform softmax → E[α] = 0.5
 (balanced hybrid — a reasonable baseline without fine-tuning)
 
 Training (optional, offline)
-─────────────────────────────
+
   Loss:     L = 0.62 · L_CE + 0.38 · L_WD
                 (cross-entropy + 1-D Wasserstein distance)
   Negatives: antagonist sampling — select negatives that outrank the
@@ -46,7 +45,6 @@ import os
 from typing import Optional
 
 import numpy as np
-
 
 class QDAPSmall:
     """
@@ -80,9 +78,7 @@ class QDAPSmall:
         if model_path and os.path.exists(model_path):
             self.load(model_path)
 
-    # ------------------------------------------------------------------
     # Inference
-    # ------------------------------------------------------------------
 
     def predict_alpha(self, query_embedding: np.ndarray) -> float:
         """
@@ -100,25 +96,23 @@ class QDAPSmall:
         if emb.ndim == 0 or emb.shape[-1] != self.embed_dim:
             return 0.5   # shape mismatch — return neutral fallback
 
-        # ── Linear projection: (101, d) @ (d,) + (101,) → (101,) ──────
+        #  Linear projection: (101, d) @ (d,) + (101,) → (101,) 
         logits: np.ndarray = self._W @ emb + self._b
 
-        # ── Conv1D: edge-pad → convolve → trim to N_BINS ───────────────
+        #  Conv1D: edge-pad → convolve → trim to N_BINS 
         pad     = self.CONV_KERNEL_SIZE // 2          # 3
         padded  = np.pad(logits, pad, mode="edge")
         smoothed = np.convolve(padded, self._kernel, mode="valid")[: self.N_BINS]
 
-        # ── Softmax (numerically stable) ───────────────────────────────
+        #  Softmax (numerically stable) 
         smoothed = smoothed - smoothed.max()
         probs    = np.exp(smoothed)
         probs   /= probs.sum()
 
-        # ── Expected α = Σ p_i · α_i ───────────────────────────────────
+        #  Expected α = Σ p_i · α_i 
         return float(np.dot(probs, self._ALPHA_GRID))
 
-    # ------------------------------------------------------------------
     # Online learning (REINFORCE)
-    # ------------------------------------------------------------------
 
     def update_online(
         self,
@@ -162,7 +156,7 @@ class QDAPSmall:
         if emb.ndim == 0 or emb.shape[-1] != self.embed_dim:
             return   # shape mismatch — skip silently
 
-        # ── Forward pass (same as predict_alpha) ───────────────────────────
+        #  Forward pass (same as predict_alpha) 
         logits   = self._W @ emb + self._b
         pad      = self.CONV_KERNEL_SIZE // 2
         padded   = np.pad(logits, pad, mode="edge")
@@ -171,7 +165,7 @@ class QDAPSmall:
         probs    = np.exp(smoothed)
         probs   /= probs.sum()
 
-        # ── Target bin ─────────────────────────────────────────────────────
+        #  Target bin
         if reward > 0:
             target_bin = int(round(alpha_used * 100))
         else:
@@ -181,7 +175,7 @@ class QDAPSmall:
         target_one_hot = np.zeros(self.N_BINS, dtype=np.float32)
         target_one_hot[target_bin] = 1.0
 
-        # ── REINFORCE gradient — backprop through Conv1D ──────────────────
+        #  REINFORCE gradient — backprop through Conv1D 
         # grad_smoothed = (target_one_hot − probs) is the gradient w.r.t. the
         # Conv1D output.  To get the gradient w.r.t. the linear-layer logits,
         # we must propagate back through the moving-average Conv1D.
@@ -198,9 +192,7 @@ class QDAPSmall:
         self._b      += scale * grad_logits                   # (N_BINS,)
         self._trained = True
 
-    # ------------------------------------------------------------------
     # Persistence
-    # ------------------------------------------------------------------
 
     def save(self, path: str) -> None:
         """Save linear weights to ``<path>.npz``."""
@@ -231,9 +223,7 @@ class QDAPSmall:
         except Exception as exc:
             print(f"[QDAP-S] Could not load weights from {path}: {exc} — using α=0.5")
 
-    # ------------------------------------------------------------------
     # Dunder helpers
-    # ------------------------------------------------------------------
 
     @property
     def is_trained(self) -> bool:

@@ -10,12 +10,9 @@ from PIL import Image
 import easyocr
 from config import settings
 
-
-# ---------------------------------------------------------------------------
 # Regex helpers
-# ---------------------------------------------------------------------------
 
-# Nhận diện heading tiếng Việt: Chương I, Điều 15, Mục 3, Phần II, Article 5...
+# Detect vietnamese heading : Chương I, Điều 15, Mục 3, Phần II, Article 5...
 # Supports both accented (Điều) and OCR-stripped (Dieu) variants for robustness.
 SECTION_HEADING_REGEX = re.compile(
     r"^("
@@ -31,25 +28,19 @@ SECTION_HEADING_REGEX = re.compile(
 
 MATH_HINT_REGEX = re.compile(r"[\=\+\-\*/\^]|\\frac|\\sum|\\int")
 
-
-# ---------------------------------------------------------------------------
 # Dataclass
-# ---------------------------------------------------------------------------
 
 @dataclass
 class Chunk:
     id: str
-    source: str          # tên file PDF
+    source: str          #  file PDF
     doc_type: str        # quy_che | tuyen_sinh | chuong_trinh | lich_hoc | hoc_phi | thong_bao | general
     page: int
-    section: str         # heading gần nhất phía trên chunk, "" nếu không có
+    section: str         # nearest heading , "" if None
     text: str
     kind: str            # native_text | ocr_text | formula
 
-
-# ---------------------------------------------------------------------------
 # Pipeline
-# ---------------------------------------------------------------------------
 
 class PdfPipeline:
     def __init__(self) -> None:
@@ -62,16 +53,14 @@ class PdfPipeline:
             all_chunks.extend(self._parse_pdf(pdf_path))
         return all_chunks
 
-    # ------------------------------------------------------------------
-    # Parse một file PDF
-    # ------------------------------------------------------------------
+    # Parse 1 file PDF
 
     def _parse_pdf(self, pdf_path: Path) -> list[Chunk]:
         doc_type = settings.resolve_doc_type(pdf_path.name)
         doc = fitz.open(pdf_path)
         chunks: list[Chunk] = []
 
-        # Theo dõi section heading hiện tại xuyên suốt file
+        # Track the current section heading in file 
         current_section: str = ""
 
         for page_idx in range(len(doc)):
@@ -79,7 +68,7 @@ class PdfPipeline:
             native_text = page.get_text("text").strip()
 
             if native_text:
-                # Cập nhật section từ native text trước
+                # Update section
                 current_section = self._update_section(native_text, current_section)
                 chunks.extend(
                     self._split_text(
@@ -128,25 +117,20 @@ class PdfPipeline:
         doc.close()
         return chunks
 
-    # ------------------------------------------------------------------
     # Section detection
-    # ------------------------------------------------------------------
 
     def _update_section(self, text: str, current: str) -> str:
         """
-        Quét từng dòng trong text, trả về heading mới nhất tìm được.
-        Nếu không có heading nào thì giữ nguyên current.
+        Scan each line in text, return the newest heading
         """
         for line in text.splitlines():
             line = line.strip()
             if SECTION_HEADING_REGEX.match(line):
-                # Cắt tối đa 120 ký tự để tránh lấy cả đoạn dài
+                # Truncate to avoid overflow
                 current = line[:120]
         return current
 
-    # ------------------------------------------------------------------
     # OCR — layout-aware reconstruction
-    # ------------------------------------------------------------------
 
     def _ocr_image(self, image: Image.Image) -> str:
         """
@@ -230,9 +214,7 @@ class PdfPipeline:
 
         return "\n".join(line for line in lines if line.strip())
 
-    # ------------------------------------------------------------------
     # Chunking
-    # ------------------------------------------------------------------
 
     def _split_text(
         self,
@@ -264,7 +246,7 @@ class PdfPipeline:
         if is_table:
             return self._split_table(source, doc_type, page, section, raw_lines, kind)
 
-        # ── Non-table: original sliding-window ────────────────────────────
+        #  Non-table: original sliding-window 
         text = re.sub(r"\s+", " ", raw_text).strip()
         if not text:
             return []
@@ -364,9 +346,7 @@ class PdfPipeline:
 
         return chunks
 
-    # ------------------------------------------------------------------
     # Formula extraction
-    # ------------------------------------------------------------------
 
     def _extract_formula_candidates(self, text: str) -> list[str]:
         """
@@ -383,15 +363,11 @@ class PdfPipeline:
                     break
         return valid
 
-
-# ---------------------------------------------------------------------------
-# Utility dùng bởi graphrag.py
-# ---------------------------------------------------------------------------
+# Utility used by graphrag.py
 
 def quick_entities(text: str) -> list[str]:
     """
-    Giữ lại để backward-compatible.
-    graphrag.py mới sẽ dùng LLM extraction thay thế hàm này.
+    Remain to backward-compatible..
     """
     entity_regex = re.compile(r"\b([A-Z][a-zA-Z0-9_\-]{2,}|[A-Z]{2,})\b")
     return sorted(set(entity_regex.findall(text)))

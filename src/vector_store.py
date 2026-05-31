@@ -6,7 +6,8 @@ from typing import Any
 
 import faiss
 import numpy as np
-
+# HNSW algo : Image it like a Tree. Node (Embedding vectors of chunks).To add a new node, we compare cosine similarity from layer by layer (start at layer 0)
+# In layer k, find the most similar node and traverse to descendants of this node (layer k + 1)
 
 class FaissStore:
     """
@@ -40,12 +41,12 @@ class FaissStore:
 
         if n >= self.HNSW_THRESHOLD:
             # HNSWFlat with inner-product metric (cosine on normalised vectors)
-            index = faiss.IndexHNSWFlat(dim, 32, faiss.METRIC_INNER_PRODUCT)
+            index = faiss.IndexHNSWFlat(dim, 32, faiss.METRIC_INNER_PRODUCT) # O(log(n).d)
             index.hnsw.efConstruction = 200   # build-time recall quality
             index.hnsw.efSearch       = 64    # query-time recall/speed balance
         else:
             # Exact brute-force for small corpora
-            index = faiss.IndexFlatIP(dim)
+            index = faiss.IndexFlatIP(dim) # O(n.d)
 
         index.add(vectors)
         self.index = index

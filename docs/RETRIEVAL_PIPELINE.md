@@ -25,7 +25,7 @@ User query
 [HyDE]      _should_hyde()?  →  hypothetical passage (analytical+complex only)
     │
     ▼
-╔══ Critic Loop  (max 3 iterations) ════════════════════════════╗
+╔══ HybGRAG Critic Loop  (max 3 iterations) ═══════════════════╗
 ║                                                               ║
 ║  [Retrieve]  Parallel: Dense FAISS │ BM25 │ Graph (PPR)      ║
 ║      │                                                        ║
@@ -67,27 +67,25 @@ The router assigns a complexity level to drive all downstream decisions.
 | `medium` | Multiple entities or mild complexity | 6 | 2 | True | Run | No |
 | `complex` | Long, multi-entity, analytical keywords, conjunctions | 8 | 3 | True | Run | If analytical |
 
-Routing happens **before** expansion and HyDE so that those expensive steps are only triggered when justified.
+Routing happens **before** expansion and HyDE so that expensive LLM calls are only triggered when justified.
 
 ---
 
 ## 3. Query Expansion
 
-**Source**: `src/query_expander.py`  
+**Source**: `src/query_expander.py`
 **Condition**: `complexity != 'simple'` and `len(sub_queries) == 1`
 
-The LLM generates 2–3 paraphrase variants of the query. These become `sub_queries` in `ProcessedQuery`. Downstream retrieval runs `query_batch()` over all variants, effectively widening the recall net.
-
-**Skipping for simple queries**: A factual lookup like "học phí kỳ 1 là bao nhiêu?" does not benefit from paraphrase variants — the correct chunk will rank top on BM25/dense regardless. Generating variants adds ~200 ms of LLM latency for zero gain.
+The LLM generates 2–3 paraphrase variants. These become `sub_queries` in `ProcessedQuery`. Downstream retrieval runs `query_batch()` over all variants, widening the recall net.
 
 ---
 
 ## 4. HyDE — Hypothetical Document Embedding
 
-**Source**: `src/agent.py` — `_hyde_expand()`  
+**Source**: `src/agent.py` — `_hyde_expand()`
 **Condition**: `complexity == 'complex'` AND (analytical keyword in query OR ≥25 words)
 
-The LLM generates a short 2–3 sentence passage that would *answer* the query, as if it were a paragraph from the actual document. The concatenation of `query + hypothetical_passage` is then used as the dense query vector.
+The LLM generates a short 2–3 sentence passage that would *answer* the query. The concatenation of `query + hypothetical_passage` is used as the dense query vector.
 
 ```
 Original:    "Tại sao sinh viên bị cảnh báo học tập?"
@@ -96,38 +94,35 @@ HyDE text:   "Sinh viên bị cảnh báo học tập khi điểm trung bình t�
 Dense query: "Tại sao sinh viên bị cảnh báo học tập?\n[hypothetical text]"
 ```
 
-The dense query vector is now biased toward documents that *contain answers*, not just those that match the question's keywords.
+**When NOT to use HyDE**: factual table lookups that happen to be "complex" (e.g., "Điều 15 quy định gì?"). HyDE generates prose that moves the query vector away from structured document chunks, hurting recall. The analytical-keyword gate prevents this.
 
 ---
 
 ## 5. Dense Retrieval
 
-**Source**: `src/graphrag.py` — `_dense_search()`  
+**Source**: `src/graphrag.py` — `_dense_search()`
 **Index**: FAISS `IndexFlatIP` (n < 500) or `IndexHNSWFlat` M=32 efSearch=64 (n ≥ 500)
+**Model**: BAAI/bge-m3 (1024-dim, multilingual)
 
-Search returns the top $2k$ nearest neighbours by inner product (= cosine similarity for L2-normalised vectors).
+Search returns the top 2k nearest neighbours by inner product (= cosine similarity for L2-normalised vectors).
 
-**Contextual embedding** (enabled by default): each chunk is embedded with a metadata prefix:
+**Contextual embedding**: each chunk is embedded with a metadata prefix at ingest time:
 
 ```
 [Loại: quy_che | Mục: Điều 15 | Nguồn: quy_che_2021.pdf]
 {chunk text}
 ```
 
-This steers the embedding space so that semantically similar chunks from the same document type cluster together — improving top-k recall for domain-specific queries.
-
 ---
 
 ## 6. BM25 Sparse Retrieval
 
-**Source**: `src/graphrag.py` — `_bm25_search()`  
-**Implementation**: `rank_bm25.BM25Okapi`, `k1=1.5`, `b=0.75`
+**Source**: `src/graphrag.py` — `_bm25_search()`
+**Implementation**: `rank_bm25.BM25Okapi`, k1=1.5, b=0.75
 
-Vietnamese tokenisation (`_tokenize_vi`): extract Unicode alphanumeric tokens of length ≥ 2 using a regex that handles all Vietnamese diacritics. Stop-words are not explicitly removed; IDF handles high-frequency terms naturally.
+Vietnamese tokenisation (`_tokenize_vi`): extract Unicode alphanumeric tokens of length ≥ 2. IDF naturally handles high-frequency terms.
 
-Returns top $2k$ by BM25 score, filtering zero-score results.
-
-**Complementarity with dense**: BM25 excels at exact-match terms: article numbers ("Điều 15"), amounts ("4.5 triệu"), dates. Dense retrieval may embed these to semantically similar vectors from wrong contexts. The two signals are combined via QDAP-S.
+Returns top 2k by BM25 score. Complements dense retrieval for exact-match terms: article numbers ("Điều 15"), amounts ("4.5 triệu"), dates.
 
 ---
 
@@ -137,28 +132,17 @@ Returns top $2k$ by BM25 score, filtering zero-score results.
 
 ### 7.1 Entity Linking
 
-Embed all unique entities at ingest time and store in `entity_vecs.npy`.  
-At query time, find the top entities by cosine:
+At query time, find the top entities by cosine similarity:
 
-$$\text{linked} = \{e : \hat{\mathbf{v}}_e \cdot \hat{\mathbf{q}} \geq \theta_{\text{link}},\; e \in \text{top-10}\}, \quad \theta_{\text{link}} = 0.45$$
+$$\text{linked} = \{e : \hat{\mathbf{v}}_e \cdot \hat{\mathbf{q}} \geq 0.45,\; e \in \text{top-10}\}$$
 
-Cache: `_entity_name_to_idx` dict built once at `load()` / `build()` gives O(1) name→index lookup (was O(n) before Fix F).
-
-**Fallbacks** (in order):
-1. Substring match: entity name appears in query string
-2. Section keyword overlap: ≥2 query words overlap with a section heading
+Fallbacks (in order): substring match → section keyword overlap.
 
 ### 7.2 Local Subgraph PPR
 
-Expand a local subgraph around the seed entities using BFS up to `hops` steps (capped at `ppr_max_subgraph = 500` nodes), then run personalised PageRank on this subgraph.
+BFS up to `hops` steps (capped at 500 nodes), then personalised PageRank on this subgraph. The personalisation vector places equal weight on seed entities.
 
-The personalisation vector $\mathbf{p}$ places equal weight on all seed entity nodes:
-
-$$p_v = \begin{cases} 1 / |\text{seeds}| & v \in \text{seed entities} \\ 0 & \text{otherwise} \end{cases}$$
-
-Extract chunk nodes from the PPR result and rank by their PPR score.
-
-**Relation weights** drive the random walk. Higher-weight edges are more "teleportable":
+**Relation weights** driving the random walk:
 
 | Relation | Weight |
 |----------|--------|
@@ -170,28 +154,23 @@ Extract chunk nodes from the PPR result and rank by their PPR score.
 
 ### 7.3 Weighted BFS Fallback
 
-If PPR returns no chunk nodes (e.g., no chunk nodes in subgraph), fall back to weighted BFS:
+If PPR returns no chunk nodes:
 
-$$s_{\text{BFS}}(v, t+1) = \sum_{u \to v} s_{\text{BFS}}(u, t) \cdot w_{u \to v} \cdot \delta^{t+1}$$
-
-where $\delta = 0.7$ is the per-hop decay.
+$$s_{\text{BFS}}(v, t+1) = \sum_{u \to v} s_{\text{BFS}}(u, t) \cdot w_{u \to v} \cdot 0.7^{t+1}$$
 
 ---
 
 ## 8. QDAP-S Fusion
 
 **Source**: `src/graphrag.py` — `_qdap_fuse()`
+**Reference**: [MATH_FOUNDATIONS.md §4](MATH_FOUNDATIONS.md)
 
-See [MATH_FOUNDATIONS.md §4](MATH_FOUNDATIONS.md) for the full derivation.
-
-**Summary**:
-1. Predict $\alpha$ from query embedding via QDAP-S predictor.
+1. Predict α from query embedding via QDAP-S predictor.
 2. Min-max normalise dense, BM25, and graph scores independently.
-3. Blend dense and BM25: $s_{\text{db}} = \alpha \cdot s'_{\text{dense}} + (1-\alpha) \cdot s'_{\text{BM25}}$
-4. Blend with graph: $s_{\text{final}} = 0.85 \cdot s_{\text{db}} + 0.15 \cdot s'_{\text{graph}}$
-5. Sort descending and return.
+3. Blend dense and BM25: `s_db = α * s_dense + (1-α) * s_BM25`
+4. Blend with graph: `s_final = 0.85 * s_db + 0.15 * s_graph`
 
-Each result carries `qdap_alpha` for debugging.
+Each result carries `qdap_alpha` in its metadata for debugging.
 
 ---
 
@@ -199,31 +178,30 @@ Each result carries `qdap_alpha` for debugging.
 
 **Source**: `src/graphrag.py` — `_doc_type_boost()`
 
-Classify query intent into one of six document types by cosine similarity to pre-embedded descriptions:
+Classify query intent by cosine similarity to pre-embedded document-type descriptions. Only activates when best-type similarity ≥ 0.40. Matching chunks get score × 1.35.
 
 | Type | Description embedded |
 |------|---------------------|
-| `hoc_phi` | "học phí, chi phí học tập, tiền đóng học, miễn giảm học phí" |
-| `quy_che` | "quy chế đào tạo, quy định, điều khoản, chính sách giáo dục" |
-| `chuong_trinh` | "chương trình đào tạo, kế hoạch học tập, môn học, tín chỉ" |
-| `lich_hoc` | "lịch học, thời khóa biểu, lịch thi, lịch giảng dạy" |
-| `tuyen_sinh` | "tuyển sinh, nhập học, xét tuyển, điểm chuẩn, đăng ký" |
-| `thong_bao` | "thông báo, thông tin cập nhật, thông cáo" |
-
-Only activates when best-type similarity ≥ 0.40. Matching chunks get score multiplied by 1.35.
+| `hoc_phi` | tuition, fees, payment, exemption |
+| `quy_che` | training regulations, rules, policies |
+| `chuong_trinh` | curriculum, study plan, credits |
+| `lich_hoc` | schedule, timetable, exam calendar |
+| `tuyen_sinh` | admissions, enrolment, cut-off scores |
+| `thong_bao` | announcements, updates, notices |
 
 ---
 
 ## 10. EHRAG Hypergraph Rescore
 
-**Source**: `src/graphrag.py` — `_hypergraph_rescore()`  
-See [HYPERGRAPH_EHRAG.md](HYPERGRAPH_EHRAG.md) for full algorithm.
+**Source**: `src/graphrag.py` — `_hypergraph_rescore()`
+**Reference**: [HYPERGRAPH_EHRAG.md](HYPERGRAPH_EHRAG.md)
 
-**Steps**:
-1. Link top-8 entities to the query via `_entity_link_embedding()`.
+1. Link top-8 entities to the query via embedding similarity.
 2. Build `seed_entity_scores = {name: cosine_sim}`.
 3. Run `EntityHypergraph.diffuse()` → `entity_weights`, `cluster_scores`.
 4. Run `topic_score_chunks(hits, entity_weights, cluster_scores)` → re-sorted hits.
+
+`S(d) = S_dense + λ1 * entity_evidence + λ2 * cluster_term`
 
 Fails open: any exception returns the original hits unchanged.
 
@@ -231,12 +209,12 @@ Fails open: any exception returns the original hits unchanged.
 
 ## 11. Cross-Encoder Reranking
 
-**Source**: `src/reranker.py`  
-**Model**: `cross-encoder/ms-marco-MiniLM-L-6-v2` (≈22 MB, lazy-loaded)
+**Source**: `src/reranker.py`
+**Model**: `cross-encoder/ms-marco-MiniLM-L-6-v2` (~22 MB, lazy-loaded singleton)
 
-Takes the top `reranker_top_k = 20` fused candidates and scores each pair `(query, chunk_text)` jointly. The cross-encoder attends across query and document, catching relevance nuances missed by bi-encoder cosine similarity.
+Scores the top `reranker_top_k = 20` fused candidates jointly as `(query, chunk_text)` pairs. The cross-encoder attends across query and document, catching relevance nuances missed by bi-encoder cosine similarity. Results annotated with `+ce` suffix in `retrieval_type`.
 
-Result: candidates re-sorted by CE score, with `retrieval_type` annotated with `+ce` suffix.
+Enabled by default (`RERANKER_ENABLED=true`). ~100 ms on CPU, ~10–20 ms on GPU.
 
 ---
 
@@ -248,47 +226,33 @@ After context assembly:
 
 $$q_{\text{quality}} = \frac{|T_q \cap T_c|}{|T_q|}$$
 
-If $q_{\text{quality}} < 0.15$:
-- Re-retrieve with $k' = \min(2k, 20)$ and $\text{hops}' = \min(\text{hops}+1, 3)$
-- Rerank the expanded set
-- Rebuild context
-
-This triggers for queries where the first retrieval retrieved the wrong document types or the query terms have low overlap with any stored chunk.
+If $q_{\text{quality}} < 0.15$: re-retrieve with k' = min(2k, 20) and hops' = min(hops+1, 3).
 
 ---
 
 ## 13. HybGRAG Critic Loop
 
-**Source**: `src/agent.py` — `_retrieve_with_critic()`, `src/critic.py`  
+**Source**: `src/agent.py` — `_retrieve_with_critic()`, `src/critic.py`
 **Paper**: HybGRAG (arXiv 2412.16311)
 
 ### 13.1 Fast-Path Bypass
 
-Before calling the LLM validator, check Self-RAG quality:
-
-$$\text{if } q_{\text{quality}} \geq 0.5 \Rightarrow \text{break (skip critic)}$$
-
-This avoids 50–150 ms per-iteration LLM overhead for queries where the context clearly covers the question.
+If $q_{\text{quality}} \geq 0.5$: break, skip critic call entirely.
 
 ### 13.2 Validator (C_val)
 
-A small fast LLM (`qwen2.5:0.5b`, temperature 0, max 8 tokens) answers YES/NO:
+`qwen2.5:0.5b`, temperature 0, max 8 tokens. Answers YES/NO. YES → proceed. NO → trigger Commenter.
 
-> "Does the retrieved context contain sufficient information to answer the query?"
-
-YES → proceed to generation.  
-NO → trigger Commenter.
-
-Fail-open: LLM error returns True (proceed), so the pipeline never stalls.
+Fail-open: LLM error returns True so the pipeline never stalls.
 
 ### 13.3 Commenter (C_com)
 
-A structured single-line feedback (temperature 0.2, max 120 tokens):
+Structured single-line feedback, temperature 0.2, max 120 tokens:
 
 ```
-Thiếu thực thể: [entity/concept name]
-Thiếu điều khoản: [article/decision reference]
-Thiếu bảng số liệu: [table name or data type]
+Thiếu thực thể: [entity name]
+Thiếu điều khoản: [article reference]
+Thiếu bảng số liệu: [table name]
 ```
 
 ### 13.4 Query Enrichment
@@ -297,13 +261,12 @@ Thiếu bảng số liệu: [table name or data type]
 enriched = f"{original_query} [Cần thêm: {feedback}]"
 ```
 
-The enriched query is used in the next iteration's dense and BM25 retrieval — the structured feedback terms serve as additional query tokens.
+The structured feedback terms become additional query tokens in the next iteration's dense and BM25 retrieval.
 
-### 13.5 Iteration Guard
+### 13.5 Stop Conditions
 
-Stop conditions:
 - Validator returns YES
-- Self-RAG fast-path triggered
+- Self-RAG fast-path triggered (quality ≥ 0.5)
 - `critic_max_iterations = 3` reached
 - Commenter returns empty string
 - Enriched query equals previous query (no change)
@@ -316,36 +279,21 @@ Stop conditions:
 
 ### 14.1 MMR Selection
 
-From the full fused hit list, apply MMR to select `top_k = 6` diverse, relevant chunks:
+From the full fused hit list, apply MMR to select top_k=6 diverse, relevant chunks:
 
 $$\text{MMR}(d_i) = \lambda \cdot s(d_i) - (1 - \lambda) \cdot \max_{d_j \in S} J(d_i, d_j), \quad \lambda = 0.7$$
 
 ### 14.2 Score-Proportional Budget
 
-Total context budget: `max_context_chars = 6000`. Per-chunk allocation:
-
-$$\text{budget}_i = \text{clip}\!\left(\frac{s_i}{\sum_j s_j} \cdot n \cdot \text{max\_chars\_per\_chunk},\; \text{min\_chars},\; \text{max\_chars}\right)$$
-
-where $n$ is the number of selected chunks, `max_chars_per_chunk = 500`, `min_chars_per_chunk = 150`.
-
-High-scoring chunks receive more characters; low-scoring chunks still get at least `min_chars`.
+Total budget: `max_context_chars = 6000`. Per-chunk allocation proportional to score, clipped to [min_chars=150, max_chars_per_chunk=500].
 
 ### 14.3 Sentence-Level Compression
 
-Each chunk is compressed to its budget by `compress_text()`:
+Score: `score(s) = |T_s ∩ T_q| / sqrt(|T_s|)`. Greedy selection of highest-scoring sentences within budget.
 
-1. Split into sentences on `[.!?\n]` boundaries.
-2. Score each sentence: $\text{score}(s) = |T_s \cap T_q| / \sqrt{|T_s|}$ (overlap normalised by sentence length).
-3. Greedy: select highest-scoring sentences until budget is filled.
-4. Restore original order.
+### 14.4 Context Sections (in order)
 
-This preserves the most query-relevant sentences from each chunk.
-
-### 14.4 Context Sections
-
-The assembled context string contains (in order):
-
-1. **Tài liệu liên quan** — top-k hybrid chunks (with source/page/section/score tags)
+1. **Tài liệu liên quan** — top-k hybrid chunks (source/page/section/score tags)
 2. **Quan hệ tri thức** — graph relation paths from PPR traversal
 3. **Hội thoại liên quan** — relevant conversation memory (cosine ≥ 0.5)
 4. **Câu trả lời chất lượng cao** — reinforced-recall high-rated answers

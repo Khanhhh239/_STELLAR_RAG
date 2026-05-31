@@ -32,6 +32,7 @@ from dataclasses import dataclass
 from typing import Generator
 
 from ollama import Client
+from llm_client import LLMClient
 
 from config import settings
 from critic import Critic
@@ -42,10 +43,7 @@ from query_expander import QueryExpander
 from reranker import Reranker
 from router import QueryRouter
 
-
-# ---------------------------------------------------------------------------
 # Vietnamese unaccent
-# ---------------------------------------------------------------------------
 
 def _build_unaccent_table() -> dict:
     _groups = [
@@ -64,18 +62,13 @@ def _build_unaccent_table() -> dict:
             table[ord(c.upper())] = ord(rep)
     return table
 
-
 _UNACCENT_MAP = str.maketrans(_build_unaccent_table())
-
 
 def _unaccent(text: str) -> str:
     """Strip Vietnamese diacritics -> ASCII lowercase for fuzzy matching."""
     return text.lower().translate(_UNACCENT_MAP)
 
-
-# ---------------------------------------------------------------------------
 # Self-RAG: context quality estimator
-# ---------------------------------------------------------------------------
 
 def _estimate_context_quality(context: str, query: str) -> float:
     """
@@ -92,20 +85,18 @@ def _estimate_context_quality(context: str, query: str) -> float:
     ctx_tokens = set(re.findall(r"\w+", ctx_norm))
     return len(q_tokens & ctx_tokens) / len(q_tokens)
 
-
-# ---------------------------------------------------------------------------
 # Prompts
-# ---------------------------------------------------------------------------
 
-SYSTEM_PROMPT = """Bạn là trợ lý AI hỗ trợ sinh viên tra cứu thông tin trường đại học.
-Nhiệm vụ: Trả lời CHÍNH XÁC và TỰ NHIÊN — như người am hiểu quy định, không như máy tra cứu.
+SYSTEM_PROMPT = """Bạn là trợ lý AI hỗ trợ sinh viên tra cứu thông tin quy chế đào tạo đại học.
+
+NGÔN NGỮ: CHỈ trả lời bằng TIẾNG VIỆT. Tuyệt đối không dùng tiếng Trung, tiếng Anh hay ngôn ngữ khác.
 
 Nguyên tắc bắt buộc:
-1. Ưu tiên tài liệu gốc theo thứ tự: quy_che > thong_bao > general.
-2. Trích dẫn nguồn (tên file, trang, điều khoản) khi cần thiết — không trích dẫn dài dòng với câu hỏi đơn giản.
-3. Suy luận từ tài liệu: nếu quy định có trong ngữ cảnh thì ÁP DỤNG nó, đừng nói "không tìm thấy".
-4. Trả lời trực tiếp, đơn giản, bằng ngôn ngữ sinh viên. Không lặp lại câu hỏi. Không mở đầu bằng "Theo tài liệu..." với câu hỏi thực tế đơn giản.
-5. Nếu THỰC SỰ thiếu thông tin → nêu rõ phần nào biết, phần nào chưa rõ. Không bịa đặt.
+1. CHỈ dùng thông tin có trong TÀI LIỆU NGỮ CẢNH được cung cấp bên dưới. Không dùng kiến thức ngoài.
+2. Nếu tài liệu ngữ cảnh KHÔNG có thông tin cần thiết → nói rõ: "Tài liệu không đề cập đến [X]." Không suy đoán, không bịa đặt.
+3. Trả lời trực tiếp, ngắn gọn. Không lặp lại câu hỏi. Không dùng markdown header (###) cho câu hỏi đơn giản.
+4. Trích dẫn trang/điều khoản khi trả lời về quy định cụ thể.
+5. Ưu tiên tài liệu: quy_che > thong_bao > general.
 
 Quy tắc ĐẶC BIỆT QUAN TRỌNG — phải tuân thủ tuyệt đối:
 
@@ -145,15 +136,26 @@ Lưu ý: D và D+ đều KHÔNG ĐẠT. Tra bảng trực tiếp, không suy đo
 [SỐ LIỆU] Trích dẫn số liệu chính xác từ tài liệu, không làm tròn hay ước lượng.
 """
 
-QUERY_PROCESS_PROMPT = """Phân tích câu hỏi sau của sinh viên và trả về JSON thuần túy.
+QUERY_PROCESS_PROMPT = """Phân tích câu hỏi sau của sinh viên về quy chế đào tạo đại học.
 
 Câu hỏi: {question}
 
-Trả về đúng định dạng này, không giải thích, không markdown:
+Hướng dẫn tạo sub_queries:
+- Câu hỏi LIỆT KÊ / ĐẾM ("có mấy loại", "các loại", "bao nhiêu", "thể loại"):
+  → Tạo 2-3 sub_queries bao gồm: câu hỏi tổng quát + câu hỏi về từng loại/nhóm chính
+  Ví dụ: "Có mấy loại học phần?" → ["Các loại học phần là gì?", "Học phần bắt buộc và tự chọn là gì?"]
+- Câu hỏi SO SÁNH ("khác nhau", "giống nhau", "phân biệt"):
+  → Tạo 2 sub_queries, mỗi câu hỏi về 1 đối tượng
+- Câu hỏi ĐIỀU KIỆN / QUY TRÌNH ("làm thế nào", "điều kiện", "khi nào"):
+  → Tạo 2-3 sub_queries bao gồm điều kiện cần, bước thực hiện
+- Câu hỏi ĐƠN GIẢN (1 thực thể, 1 sự kiện):
+  → 1 sub_query là bản dịch formal của câu hỏi sang ngôn ngữ văn bản quy chế
+
+Trả về JSON thuần túy, không giải thích, không markdown:
 {{
-  "entities": ["danh sách thực thể được nhắc đến"],
-  "sub_queries": ["tách thành các câu hỏi nhỏ nếu phức tạp, ngược lại 1 phần tử"],
-  "expanded_terms": ["từ đồng nghĩa hoặc cách gọi khác trong ngữ cảnh trường học"]
+  "entities": ["các thực thể chính trong câu hỏi"],
+  "sub_queries": ["các câu hỏi con theo hướng dẫn trên"],
+  "expanded_terms": ["thuật ngữ quy chế/văn bản tương đương với từ trong câu hỏi"]
 }}
 """
 
@@ -163,10 +165,7 @@ chứa câu trả lời cho câu hỏi sau. Chỉ trả về đoạn văn, khôn
 Câu hỏi: {question}
 Đoạn văn:"""
 
-
-# ---------------------------------------------------------------------------
 # Domain keywords for fast entity extraction
-# ---------------------------------------------------------------------------
 
 _DOMAIN_ENTITIES_RAW: list[str] = [
     "học phí", "tín chỉ", "học kỳ", "tốt nghiệp", "điều kiện tốt nghiệp",
@@ -184,6 +183,7 @@ _DOMAIN_ENTITIES_RAW: list[str] = [
     "khoa", "trường", "bộ môn", "phòng đào tạo", "phòng công tác sinh viên",
     "sinh viên", "giảng viên", "giáo sư", "tiến sĩ",
     "chương trình đào tạo", "ngành", "chuyên ngành", "môn học",
+    "học phần", "loại học phần", "quy chế", "điều khoản",
 ]
 
 _DOMAIN_ENTITIES: list[tuple[str, str]] = sorted(
@@ -211,7 +211,6 @@ _HYDE_ANALYTICAL_KW = frozenset({
     "impact", "cause", "effect",
 })
 
-
 def _should_hyde(question: str, complexity: str) -> bool:
     """
     Return True only when HyDE is likely to improve dense retrieval.
@@ -235,10 +234,7 @@ def _should_hyde(question: str, complexity: str) -> bool:
         return True
     return len(question.split()) >= 25
 
-
-# ---------------------------------------------------------------------------
 # ProcessedQuery dataclass
-# ---------------------------------------------------------------------------
 
 @dataclass
 class ProcessedQuery:
@@ -247,10 +243,7 @@ class ProcessedQuery:
     sub_queries:   list[str]
     expanded_terms: list[str]
 
-
-# ---------------------------------------------------------------------------
 # Fast heuristic query processor (zero LLM overhead)
-# ---------------------------------------------------------------------------
 
 def _fast_process(question: str) -> ProcessedQuery:
     """Extract domain entities using normalised keyword matching."""
@@ -263,9 +256,18 @@ def _fast_process(question: str) -> ProcessedQuery:
         expanded_terms=[],
     )
 
-
 def _needs_llm_processing(question: str) -> bool:
-    """Decide if the extra LLM query-processing latency is worth it."""
+    """
+    Decide if the extra LLM query-processing latency is worth it.
+
+    LLM processing generates proper sub_queries and entities, enabling
+    higher-quality retrieval routing. We trigger it whenever the query:
+    - is long (> 22 words)
+    - uses conjunctions / complex keywords
+    - OR contains a known domain entity — even for short queries like
+      "Có mấy loại học phần?" — so the LLM can decompose enumeration,
+      comparison, and multi-aspect questions correctly.
+    """
     words = question.split()
     if len(words) > 22:
         return True
@@ -274,12 +276,14 @@ def _needs_llm_processing(question: str) -> bool:
         return True
     if any(kw in q_norm for kw in _COMPLEX_KW_NORM):
         return True
+    # Trigger LLM for any query mentioning a domain entity, regardless of length.
+    # Short domain queries (e.g. "How many course types are there?") need LLM decomposition to
+    # produce sub_queries for enumeration / listing — fast path misses this.
+    if any(key in q_norm for key, _ in _DOMAIN_ENTITIES):
+        return True
     return False
 
-
-# ---------------------------------------------------------------------------
 # LLM-backed query processor (complex queries only)
-# ---------------------------------------------------------------------------
 
 class QueryProcessor:
     def __init__(self, client: Client) -> None:
@@ -302,19 +306,27 @@ class QueryProcessor:
             raw  = resp["message"]["content"].strip()
             raw  = re.sub(r"```(?:json)?|```", "", raw).strip()
             data = json.loads(raw)
+
+            def _to_list(val, fallback: list) -> list:
+                """LLM đôi khi trả dict/str thay vì list — normalize về list."""
+                if isinstance(val, list):
+                    return [str(v) for v in val if v]
+                if isinstance(val, dict):
+                    return list(val.values())
+                if isinstance(val, str):
+                    return [val] if val else fallback
+                return fallback
+
             return ProcessedQuery(
                 original=question,
-                entities=data.get("entities", []),
-                sub_queries=data.get("sub_queries", [question]),
-                expanded_terms=data.get("expanded_terms", []),
+                entities=_to_list(data.get("entities"), []),
+                sub_queries=_to_list(data.get("sub_queries"), [question]),
+                expanded_terms=_to_list(data.get("expanded_terms"), []),
             )
         except Exception:
             return _fast_process(question)
 
-
-# ---------------------------------------------------------------------------
 # Thread-safe LRU cache
-# ---------------------------------------------------------------------------
 
 class LRUCache:
     """256-entry LRU cache keyed on normalised query text.  Thread-safe."""
@@ -358,47 +370,81 @@ class LRUCache:
     def __len__(self) -> int:
         return len(self._cache)
 
-
-# ---------------------------------------------------------------------------
 # Sentence-level context compressor
-# ---------------------------------------------------------------------------
 
 _SENT_SPLIT = re.compile(r"(?<=[.!?。\n])\s+")
 
-
 def _sent_score(sentence: str, query_tokens: set[str]) -> float:
-    """Keyword-overlap relevance, sqrt-normalised by sentence length."""
-    toks = set(re.findall(r"\w+", sentence.lower()))
+    """
+    Keyword-overlap relevance using BOTH original and unaccented tokens.
+    Scores on unaccented form so Vietnamese diacritics don't block matching.
+    sqrt-normalised by sentence length to avoid penalising long sentences.
+    """
+    # Score on unaccented tokens so diacritics are ignored ("học" matches "hoc")
+    sent_norm = _unaccent(sentence)
+    toks = set(re.findall(r"\w+", sent_norm))
     if not toks:
         return 0.0
     return len(toks & query_tokens) / (max(len(toks), 1) ** 0.5)
 
-
 def compress_text(text: str, query: str, budget: int = 450) -> str:
-    """Return the most query-relevant sentences within budget characters."""
+    """
+    Return the most query-relevant sentences within budget characters.
+
+    Changes vs original:
+    - Joins OCR soft line breaks before splitting (fixes mid-sentence \n)
+    - Uses unaccented token matching (fixes Vietnamese diacritic mismatch)
+    - Always keeps first sentence as structural anchor (title/header)
+    - Falls back to first `budget` chars instead of discarding content
+    - Minimum budget guard: never compress below 200 chars
+    """
+    budget = max(budget, 200)
+
+    # Join OCR soft line breaks: letter\nletter → letter letter
+    # e.g. soft line-break inside a phrase → join with space
+    text = re.sub(
+        r'(?<=[a-zA-ZÀ-ỹà-ỹ])\n[ \t]*(?=[a-zà-ỹ])',
+        ' ', text
+    )
+
     if len(text) <= budget:
         return text
-    sents = [s.strip() for s in _SENT_SPLIT.split(text) if len(s.strip()) > 15]
+
+    sents = [s.strip() for s in _SENT_SPLIT.split(text) if len(s.strip()) > 10]
     if not sents:
         return text[:budget]
-    qtoks  = set(re.findall(r"\w+", query.lower()))
-    scored = sorted(enumerate(sents), key=lambda x: _sent_score(x[1], qtoks), reverse=True)
+
+    # Unaccented query tokens for matching
+    q_norm = _unaccent(query)
+    qtoks  = set(re.findall(r"\w+", q_norm))
+
+    # Score all sentences; give sentence[0] a small bonus (structural anchor)
+    scored = sorted(
+        enumerate(sents),
+        key=lambda x: _sent_score(x[1], qtoks) + (0.05 if x[0] == 0 else 0.0),
+        reverse=True,
+    )
+
+    # Greedily pick highest-scoring sentences within budget, preserving order
     kept: list[tuple[int, str]] = []
     used = 0
     for i, s in scored:
-        if used + len(s) + 2 > budget:
+        needed = len(s) + 2
+        if used + needed > budget:
+            # If budget almost full, stop rather than skipping too many
+            if used >= budget * 0.6:
+                break
             continue
         kept.append((i, s))
-        used += len(s) + 2
+        used += needed
+
     if not kept:
         return text[:budget]
+
     kept.sort(key=lambda x: x[0])
     return ". ".join(s for _, s in kept)
 
-
-# ---------------------------------------------------------------------------
 # Organizer — context assembly with MMR diversity
-# ---------------------------------------------------------------------------
 
 class Organizer:
 
@@ -455,13 +501,20 @@ class Organizer:
     ) -> str:
         sections: list[str] = []
 
-        # ── 1. Unified hybrid hits ─────────────────────────────────────
-        seen_ids: set[str] = set()
+        # 1. Unified hybrid hits
+        # Dedup by CONTENT hash (first 120 normalised chars) — not by chunk-id,
+        # because different retrieval methods (dense / bm25 / qdap_s) can return
+        # the same chunk with different metadata IDs, causing duplicates.
+        seen_text_hashes: set[str] = set()
         unique_dense: list[dict] = []
         for item in sorted(dense_hits, key=lambda x: x.get("score", 0), reverse=True):
-            did = str(item.get("id") or item.get("text", "")[:60])
-            if did not in seen_ids:
-                seen_ids.add(did)
+            raw_text   = item.get("text", "")
+            # normalise: lowercase, collapse whitespace, strip OCR pipe artefacts
+            norm_text  = re.sub(r"\s*\|\s*", " ", raw_text).lower()
+            norm_text  = re.sub(r"\s+", " ", norm_text).strip()
+            text_key   = norm_text[:120]
+            if text_key not in seen_text_hashes:
+                seen_text_hashes.add(text_key)
                 unique_dense.append(item)
 
         final_dense = self._mmr_select(
@@ -493,16 +546,19 @@ class Organizer:
                     settings.min_chars_per_chunk,
                     min(settings.max_chars_per_chunk, chunk_budget),
                 )
-                text    = compress_text(item.get("text", ""), query, budget=chunk_budget)
+                raw_chunk = item.get("text", "")
+                # Strip OCR pipe artefacts (e.g. "năng | lực" → "năng lực")
+                clean_chunk = re.sub(r"\s*\|\s*", " ", raw_chunk)
+                clean_chunk = re.sub(r"\s{2,}", " ", clean_chunk).strip()
+                text    = compress_text(clean_chunk, query, budget=chunk_budget)
                 src_tag = (
                     f"[{item.get('source', '')} | tr.{item.get('page', '')} | "
-                    f"{item.get('doc_type', '')} | {item.get('section', '') or 'N/A'} | "
-                    f"score={item.get('score', 0):.4f} | {item.get('retrieval_type', '')}]"
+                    f"score={item.get('score', 0):.4f}]"
                 )
                 sections.append(f"{src_tag}\n{text}")
                 total_chars += len(text)
 
-        # ── 2. Graph relation paths ────────────────────────────────────
+        # 2. Graph relation paths
         graph_ids_in_dense = {
             str(item.get("id") or item.get("text", "")[:60])
             for item in final_dense
@@ -521,14 +577,24 @@ class Organizer:
                 )
                 sections.append(f"{src_tag}\nPath: {g['relation_path']}")
 
-        # ── 3. Memory recall ──────────────────────────────────────────
-        relevant_mem = [m for m in memory_hits if m.get("score", 0) >= 0.5]
+        # 3. Memory recall
+        # Raise threshold and filter out "not mentioned" answers — these are
+        # known-bad answers that would poison the LLM's reasoning if recalled.
+        _POISON_PHRASES = (
+            "không đề cập", "không có thông tin", "không tìm thấy",
+            "không được đề cập", "không có trong tài liệu",
+        )
+        relevant_mem = [
+            m for m in memory_hits
+            if m.get("score", 0) >= 0.72
+            and not any(p in m.get("content", "").lower() for p in _POISON_PHRASES)
+        ]
         if relevant_mem:
             sections.append("\n== Hội thoại liên quan trước đó ==")
-            for m in relevant_mem[:3]:
+            for m in relevant_mem[:2]:
                 sections.append(f"{m.get('role', '')}: {m.get('content', '')[:200]}")
 
-        # ── 4. Reinforced answers ─────────────────────────────────────
+        # 4. Reinforced answers
         if reinforced_hits:
             sections.append("\n== Câu trả lời đã xác nhận chất lượng cao ==")
             for r in reinforced_hits[:2]:
@@ -537,13 +603,25 @@ class Organizer:
                     f"Đáp: {r.get('assistant_answer', '')[:150]}"
                 )
 
-        # ── 5. Recent conversation ────────────────────────────────────
-        if recent:
+        # 5. Recent conversation (only used for follow-up queries)
+        # Follow-up = short question with a referential pronoun to the previous turn.
+        # Fully new questions do NOT need history — prevents LLM from repeating the previous answer.
+        _FOLLOWUP_MARKERS = (
+            "đó", "cái đó", "cái này", "nó", "vậy thì", "còn về",
+            "tiếp theo", "thêm nữa", "còn gì", "ý trên", "trường hợp trên",
+            "câu hỏi trên", "điều đó", "như vậy", "theo đó", "nếu vậy",
+        )
+        q_lower = query.lower()
+        is_followup = (
+            len(query.split()) < 12
+            and any(m in q_lower for m in _FOLLOWUP_MARKERS)
+        )
+        if recent and is_followup:
             sections.append("\n== Lịch sử hội thoại gần đây ==")
-            for m in recent[-4:]:
-                sections.append(f"{m['role']}: {m['content'][:150]}")
+            for m in recent[-2:]:   # only last 1 turn (2 messages)
+                sections.append(f"{m['role']}: {m['content'][:200]}")
 
-        # ── 6. [NEW] Critic feedback note ────────────────────────────
+        # 6. [NEW] Critic feedback note
         if critic_feedback and critic_feedback.strip():
             sections.append(
                 f"\n[Ghi chú tra cứu bổ sung: {critic_feedback[:200]}]"
@@ -551,10 +629,7 @@ class Organizer:
 
         return "\n".join(sections)
 
-
-# ---------------------------------------------------------------------------
 # Agent
-# ---------------------------------------------------------------------------
 
 class Agent:
     """
@@ -567,6 +642,9 @@ class Agent:
     """
 
     def __init__(self) -> None:
+        # Use unified LLMClient (supports Ollama + Cloud LLM based on LLM_BACKEND)
+        self.llm_client      = LLMClient()
+        # Keep self.client as Ollama for backward-compat with QueryProcessor
         self.client          = Client(host=settings.ollama_host)
         self.graphrag        = GraphRAG()
         self.memory          = Memory()
@@ -597,9 +675,7 @@ class Agent:
         if self.graphrag.exists():
             self.graphrag.load()
 
-    # ------------------------------------------------------------------
     # HyDE
-    # ------------------------------------------------------------------
 
     def _hyde_expand(self, question: str) -> str:
         """Generate a short hypothetical document passage for dense embedding."""
@@ -624,9 +700,7 @@ class Agent:
             pass
         return question
 
-    # ------------------------------------------------------------------
     # Core retrieval + context assembly (DRY)
-    # ------------------------------------------------------------------
 
     def _retrieve_and_build_context(
         self,
@@ -659,8 +733,10 @@ class Agent:
                 dense_hits.extend(res.get("dense_hits", []))
                 graph_hits.extend(res.get("graph_hits", []))
             else:
+                # Fallback to user_query when sub_queries is empty (QP parse failed)
+                primary_query = processed.sub_queries[0] if processed.sub_queries else user_query
                 res = self.graphrag.query(
-                    processed.sub_queries[0],
+                    primary_query,
                     k=top_k, hops=hops, use_graph=use_graph,
                     hyde_query=hyde_query,
                 )
@@ -672,6 +748,16 @@ class Agent:
             for term in processed.expanded_terms[:2]:
                 res = self.graphrag.query(term, k=2, hops=0, use_graph=False)
                 dense_hits.extend(res.get("dense_hits", []))
+
+            # Dedup before reranking — identical text chunks waste CE slots
+            _seen_text: set[str] = set()
+            deduped: list[dict] = []
+            for h in dense_hits:
+                key = re.sub(r"\s+", " ", h.get("text", "")).strip()[:150]
+                if key not in _seen_text:
+                    _seen_text.add(key)
+                    deduped.append(h)
+            dense_hits = deduped
 
             # Cross-encoder reranking
             reranker = Reranker.get()
@@ -738,18 +824,17 @@ class Agent:
 
         return context, dense_hits, graph_hits
 
-    # ------------------------------------------------------------------
     # HybGRAG critic loop (NEW)
-    # ------------------------------------------------------------------
 
     def _retrieve_with_critic(
         self,
-        user_query: str,
-        processed:  ProcessedQuery,
-        top_k:      int,
-        hops:       int,
-        use_graph:  bool,
-        hyde_query: str | None,
+        user_query:  str,
+        processed:   ProcessedQuery,
+        top_k:       int,
+        hops:        int,
+        use_graph:   bool,
+        hyde_query:  str | None,
+        complexity:  str = "simple",
     ) -> tuple[str, list[dict], list[dict]]:
         """
         Wraps _retrieve_and_build_context in the HybGRAG critic loop.
@@ -780,6 +865,11 @@ class Agent:
                 query, processed, top_k, hops, use_graph, hyde_query,
                 critic_feedback=feedback,
             )
+
+            # Skip critic for simple queries — small model hallucinates on
+            # single-entity factual lookups and only adds noise to context.
+            if complexity == "simple":
+                break
 
             # Only run critic when enabled, available, and index exists
             if not (settings.critic_enabled and self.critic and self.graphrag.exists()):
@@ -839,9 +929,7 @@ class Agent:
             ]
             return "\n".join(p for p in paths if p.strip())
 
-    # ------------------------------------------------------------------
     # Prompt builder (shared)
-    # ------------------------------------------------------------------
 
     def _build_messages(
         self,
@@ -866,9 +954,7 @@ class Agent:
             },
         ]
 
-    # ------------------------------------------------------------------
     # Debug printer (shared)
-    # ------------------------------------------------------------------
 
     def _debug_print(
         self,
@@ -898,9 +984,7 @@ class Agent:
         ]
         print(f"\n[STELLAR-RAG v4] {' | '.join(tags)}")
 
-    # ------------------------------------------------------------------
     # answer() — blocking
-    # ------------------------------------------------------------------
 
     def answer(self, user_query: str) -> tuple[str, str]:
         """
@@ -933,7 +1017,7 @@ class Agent:
             "critic_feedback":   "",
         }
 
-        # ── 0a. Input guardrail ──────────────────────────────────────────
+        # 0a. Input guardrail
         if settings.guardrail_enabled:
             gr = self.input_guardrail.check(user_query)
             self.debug_info["guardrail_action"] = gr.action
@@ -954,7 +1038,7 @@ class Agent:
                     return warn_msg, turn_id
             user_query = gr.sanitized_query
 
-        # ── 0b. Cache check ──────────────────────────────────────────────
+        # 0b. Cache check
         cached = self.cache.get(user_query)
         if cached:
             cached_answer, _ = cached
@@ -963,16 +1047,16 @@ class Agent:
             self.memory.add("assistant", cached_answer, turn_id=turn_id)
             return cached_answer, turn_id
 
-        # ── 1. Query processing ──────────────────────────────────────────
+        # 1. Query processing
         processed = self.query_proc.process(user_query)
 
-        # ── 2. Routing FIRST — drives both expansion and HyDE decisions ──
+        # 2. Routing FIRST — drives both expansion and HyDE decisions
         complexity = self.router.classify(processed)
         self.debug_info["query_complexity"] = complexity
         params     = self.router.retrieval_params(complexity)
         top_k, hops, use_graph = params["top_k"], params["hops"], params["use_graph"]
 
-        # ── 1b. Query expansion — skip for simple factual queries ─────────
+        # 1b. Query expansion — skip for simple factual queries
         # Simple queries (single-entity factual lookups) don't benefit from
         # paraphrase variants; expansion only adds LLM latency.
         if (settings.query_expansion_enabled
@@ -989,7 +1073,7 @@ class Agent:
                 )
                 print(f"[EXPAND] {len(expanded_variants)} variants")
 
-        # ── 3. HyDE — only for analytically complex queries ───────────────
+        # 3. HyDE — only for analytically complex queries
         # HyDE helps when the query asks for reasoning/analysis/comparison.
         # For factual lookups (tables, numbers, dates) it can hurt by generating
         # a hypothetical passage that doesn't match the document's exact format.
@@ -998,12 +1082,12 @@ class Agent:
             hyde_query = self._hyde_expand(user_query)
         self.debug_info["hyde_used"] = hyde_query is not None
 
-        # ── 4–5. Retrieval + critic loop ─────────────────────────────────
+        # 4–5. Retrieval + critic loop
         context, dense_hits, graph_hits = self._retrieve_with_critic(
             user_query, processed, top_k, hops, use_graph, hyde_query
         )
 
-        # ── Populate debug_info ──────────────────────────────────────────
+        # Populate debug_info
         scores  = [h.get("score", 0.0) for h in dense_hits if h.get("score") is not None]
         sources = list({h.get("source", "") for h in dense_hits if h.get("source")})
         self.debug_info.update({
@@ -1018,33 +1102,57 @@ class Agent:
             "graph_hits":      graph_hits,
         })
 
-        # ── 6. Build prompt ──────────────────────────────────────────────
+        # 6. Build prompt
         messages = self._build_messages(user_query, processed, context)
         self.debug_info["llm_messages"] = messages
         reranked = any("+ce" in (h.get("retrieval_type") or "") for h in dense_hits)
         self._debug_print(user_query, complexity, top_k, hops,
                           hyde_query, dense_hits, graph_hits, messages, reranked)
 
-        # ── 7. LLM generation ────────────────────────────────────────────
-        resp   = self.client.chat(model=settings.ollama_model, messages=messages)
+        # 7. LLM generation
+        resp   = self.llm_client.chat(model=settings.ollama_model, messages=messages)
         answer = resp["message"]["content"]
 
-        # ── 7b. Output guardrail ─────────────────────────────────────────
+        # 7b. Auto-retry when answer says "not mentioned" with higher top_k
+        _NO_INFO_PHRASES = (
+            "tài liệu không đề cập", "không có thông tin",
+            "không tìm thấy", "không được đề cập", "không có trong tài liệu",
+        )
+        answer_lower = answer.lower()
+        is_no_info   = any(ph in answer_lower for ph in _NO_INFO_PHRASES)
+
+        if is_no_info and complexity != "complex":
+            # Upgrade one complexity tier and retry once
+            fb_params = self.router.fallback_params(complexity)
+            fb_context, fb_dense, fb_graph = self._retrieve_with_critic(
+                user_query, processed,
+                fb_params["top_k"], fb_params["hops"], fb_params["use_graph"],
+                hyde_query,
+            )
+            if fb_context.strip():
+                fb_messages = self._build_messages(user_query, processed, fb_context)
+                fb_resp     = self.llm_client.chat(model=settings.ollama_model, messages=fb_messages)
+                fb_answer   = fb_resp["message"]["content"]
+                fb_lower    = fb_answer.lower()
+                # Only use retry answer if it no longer says "not mentioned"
+                if not any(ph in fb_lower for ph in _NO_INFO_PHRASES):
+                    answer = fb_answer
+                    print(f"[RETRY] upgraded {complexity}→{fb_params} found answer")
+
+        # 7c. Output guardrail
         if settings.guardrail_enabled and settings.guardrail_output_check and context:
             out_gr = self.out_guardrail.check(answer, context)
             if out_gr.action == "warn":
                 print(f"[OUTPUT GUARDRAIL] {out_gr.reason}")
 
-        # ── 8. Cache + memory ────────────────────────────────────────────
+        # 8. Cache + memory
         self.cache.put(user_query, (answer, turn_id))
         self.memory.add("user",      user_query, turn_id=turn_id)
         self.memory.add("assistant", answer,     turn_id=turn_id)
 
         return answer, turn_id
 
-    # ------------------------------------------------------------------
     # answer_stream() — streaming
-    # ------------------------------------------------------------------
 
     def answer_stream(
         self, user_query: str
@@ -1061,7 +1169,7 @@ class Agent:
         """
         turn_id = str(uuid.uuid4())
 
-        # ── 0a. Input guardrail ──────────────────────────────────────────
+        # 0a. Input guardrail
         if settings.guardrail_enabled:
             gr = self.input_guardrail.check(user_query)
             if gr.action == "block":
@@ -1082,7 +1190,7 @@ class Agent:
                     return
             user_query = gr.sanitized_query
 
-        # ── 0b. Cache check ──────────────────────────────────────────────
+        # 0b. Cache check
         cached = self.cache.get(user_query)
         if cached:
             cached_answer, _ = cached
@@ -1092,13 +1200,13 @@ class Agent:
             yield cached_answer, True
             return
 
-        # ── 1. Query processing + 2. Routing (before expansion) ─────────
+        # 1. Query processing + 2. Routing (before expansion)
         processed  = self.query_proc.process(user_query)
         complexity = self.router.classify(processed)
         params     = self.router.retrieval_params(complexity)
         top_k, hops, use_graph = params["top_k"], params["hops"], params["use_graph"]
 
-        # ── 1b. Expansion — skip for simple ──────────────────────────────
+        # 1b. Expansion — skip for simple
         if (settings.query_expansion_enabled
                 and complexity != "simple"
                 and len(processed.sub_queries) == 1):
@@ -1112,7 +1220,7 @@ class Agent:
                 )
                 print(f"[EXPAND] {len(expanded_variants)} variants")
 
-        # ── 3. HyDE (analytical complex only) + critic loop ─────────────
+        # 3. HyDE (analytical complex only) + critic loop
         hyde_query: str | None = None
         if settings.hyde_enabled and _should_hyde(user_query, complexity):
             hyde_query = self._hyde_expand(user_query)
@@ -1127,7 +1235,7 @@ class Agent:
         self._debug_print(user_query, complexity, top_k, hops,
                           hyde_query, dense_hits, graph_hits, messages, reranked)
 
-        # ── 6. Streaming LLM generation ──────────────────────────────────
+        # 6. Streaming LLM generation
         tokens: list[str] = []
         try:
             for chunk in self.client.chat(
@@ -1148,22 +1256,132 @@ class Agent:
 
         full_answer = "".join(tokens)
 
-        # ── 7b. Output guardrail ─────────────────────────────────────────
+        # 7b. Output guardrail
         if settings.guardrail_enabled and settings.guardrail_output_check and context:
             out_gr = self.out_guardrail.check(full_answer, context)
             if out_gr.action == "warn":
                 print(f"[OUTPUT GUARDRAIL] {out_gr.reason}")
 
-        # ── 8. Cache + memory ────────────────────────────────────────────
+        # 8. Cache + memory
         self.cache.put(user_query, (full_answer, turn_id))
         self.memory.add("user",      user_query,  turn_id=turn_id)
         self.memory.add("assistant", full_answer, turn_id=turn_id)
 
         yield full_answer, True
 
-    # ------------------------------------------------------------------
+    # answer_dual() — Ollama + Cloud LLM in parallel, same context
+
+    def answer_dual(self, user_query: str) -> tuple[str, str, str]:
+        """
+        Chạy retrieval pipeline 1 lần, sau đó gửi cùng prompt đến
+        Run Ollama AND Cloud LLM in parallel (ThreadPoolExecutor).
+
+        Returns:
+            (ollama_answer, cloud_answer, turn_id)
+
+        Nếu một backend lỗi, trả về chuỗi mô tả lỗi cho backend đó.
+        Câu trả lời Ollama được lưu vào cache + memory (primary).
+        """
+        turn_id = str(uuid.uuid4())
+
+        # 0a. Input guardrail
+        if settings.guardrail_enabled:
+            gr = self.input_guardrail.check(user_query)
+            if gr.action == "block":
+                msg = f"Yêu cầu bị từ chối: {gr.reason}"
+                self.memory.add("user",      user_query, turn_id=turn_id)
+                self.memory.add("assistant", msg,        turn_id=turn_id)
+                return msg, msg, turn_id
+            if gr.action == "warn" and settings.guardrail_block_ood:
+                msg = f"{gr.reason}\n\nVui lòng đặt câu hỏi về thông tin trường đại học."
+                return msg, msg, turn_id
+            user_query = gr.sanitized_query
+
+        # 0b. Cache check
+        cached = self.cache.get(user_query)
+        if cached:
+            cached_answer, _ = cached
+            print(f"[CACHE HIT dual] '{user_query[:60]}'")
+            self.memory.add("user",      user_query,    turn_id=turn_id)
+            self.memory.add("assistant", cached_answer, turn_id=turn_id)
+            return cached_answer, cached_answer, turn_id
+
+        # 1–5. Retrieval (same as answer())
+        processed  = self.query_proc.process(user_query)
+        complexity = self.router.classify(processed)
+        params     = self.router.retrieval_params(complexity)
+        top_k, hops, use_graph = params["top_k"], params["hops"], params["use_graph"]
+
+        if (settings.query_expansion_enabled
+                and complexity != "simple"
+                and len(processed.sub_queries) == 1):
+            expanded = self.query_expander.expand(user_query)
+            if len(expanded) > 1:
+                processed = ProcessedQuery(
+                    original=processed.original,
+                    entities=processed.entities,
+                    sub_queries=expanded,
+                    expanded_terms=processed.expanded_terms,
+                )
+
+        hyde_query: str | None = None
+        if settings.hyde_enabled and _should_hyde(user_query, complexity):
+            hyde_query = self._hyde_expand(user_query)
+
+        self.debug_info = {"critic_iterations": 0, "critic_feedback": ""}
+        context, dense_hits, graph_hits = self._retrieve_with_critic(
+            user_query, processed, top_k, hops, use_graph, hyde_query,
+            complexity=complexity,
+        )
+
+        messages = self._build_messages(user_query, processed, context)
+        reranked = any("+ce" in (h.get("retrieval_type") or "") for h in dense_hits)
+        self._debug_print(user_query, complexity, top_k, hops,
+                          hyde_query, dense_hits, graph_hits, messages, reranked)
+        # Store for ?debug command
+        self.debug_info["context"]      = context
+        self.debug_info["llm_messages"] = messages
+        self.debug_info["dense_hits"]   = dense_hits
+
+        # 6. Dual generation (parallel)
+        # Ensure both backends are initialised
+        self.llm_client.ensure_dual()
+
+        ollama_resp, cloud_resp, errors = self.llm_client.chat_dual(
+            model=settings.ollama_model,
+            messages=messages,
+            options={"temperature": 0.0},
+        )
+
+        ollama_answer = (
+            ollama_resp["message"]["content"]
+            if ollama_resp is not None
+            else f"[Ollama lỗi: {errors.get('ollama', 'không khả dụng')}]"
+        )
+        cloud_label = settings.cloud_provider.capitalize()
+        cloud_answer = (
+            cloud_resp.content
+            if cloud_resp is not None
+            else f"[{cloud_label} lỗi: {errors.get('cloud', 'không khả dụng — kiểm tra CLOUD_API_KEY')}]"
+        )
+
+        # 7. Output guardrail (applied to both answers)
+        if settings.guardrail_enabled and settings.guardrail_output_check and context:
+            for ans_text, label in ((ollama_answer, "Ollama"), (cloud_answer, cloud_label)):
+                out_gr = self.out_guardrail.check(ans_text, context)
+                if out_gr.action == "warn":
+                    print(f"[OUTPUT GUARDRAIL/{label}] {out_gr.reason}")
+
+        # 8. Cache (store Ollama answer as primary) + memory
+        primary = ollama_answer if ollama_resp is not None else cloud_answer
+        self.cache.put(user_query, (primary, turn_id))
+        self.memory.add("user",      user_query, turn_id=turn_id)
+        self.memory.add("assistant", primary,    turn_id=turn_id)
+
+        print(f"\n[DUAL] Ollama={len(ollama_answer)}c  {cloud_label}={len(cloud_answer)}c")
+        return ollama_answer, cloud_answer, turn_id
+
     # Online feedback — QDAP-S reinforcement
-    # ------------------------------------------------------------------
 
     def update_qdap_feedback(self, reward: float) -> None:
         """

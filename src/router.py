@@ -15,16 +15,29 @@ from __future__ import annotations
 
 import re
 
-
 class QueryRouter:
     """Structural router — uses LLM-extracted entities and sub-queries."""
 
     # Retrieval parameters per complexity tier
+    # top_k bumped: short enumeration queries still need enough chunks to cover
+    # all relevant items (e.g. listing all types of học phần).
     _PARAMS: dict[str, dict] = {
-        "simple":  {"top_k": 4,  "hops": 0, "use_graph": False},
-        "medium":  {"top_k": 6,  "hops": 1, "use_graph": True},
-        "complex": {"top_k": 10, "hops": 2, "use_graph": True},
+        "simple":  {"top_k": 6,  "hops": 0, "use_graph": False},
+        "medium":  {"top_k": 10, "hops": 1, "use_graph": True},
+        "complex": {"top_k": 15, "hops": 2, "use_graph": True},
     }
+
+    # Fallback tier when the first retrieval attempt returns no useful answer
+    _FALLBACK: dict[str, str] = {
+        "simple":  "medium",
+        "medium":  "complex",
+        "complex": "complex",  # already at max
+    }
+
+    def fallback_params(self, complexity: str) -> dict:
+        """Return params for the next tier up — used on retry after no-answer."""
+        fallback = self._FALLBACK.get(complexity, "complex")
+        return dict(self._PARAMS[fallback])
 
     def classify(self, processed_query: object) -> str:
         """

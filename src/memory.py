@@ -16,7 +16,6 @@ from config import settings
 from embedding import Embedder
 from vector_store import FaissStore
 
-
 class Memory:
     def __init__(self) -> None:
         self.db_path:      Path      = settings.memory_db_path
@@ -30,9 +29,7 @@ class Memory:
 
         self._init_db()
 
-    # ------------------------------------------------------------------
     # Schema
-    # ------------------------------------------------------------------
 
     def _init_db(self) -> None:
         conn = sqlite3.connect(self.db_path)
@@ -64,9 +61,7 @@ class Memory:
         conn.commit()
         conn.close()
 
-    # ------------------------------------------------------------------
     # Write
-    # ------------------------------------------------------------------
 
     def add(self, role: str, content: str, turn_id: str | None = None) -> None:
         conn = sqlite3.connect(self.db_path)
@@ -107,9 +102,22 @@ class Memory:
         # Always rebuild reward index immediately — feedback is infrequent
         self._rebuild_reward_index()
 
-    # ------------------------------------------------------------------
     # Read
-    # ------------------------------------------------------------------
+
+    def clear(self) -> None:
+        """Clear all conversation history and the in-memory FAISS index."""
+        import shutil
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("DELETE FROM interactions")
+        conn.commit()
+        conn.close()
+        # Reset in-memory FAISS index
+        self.index = None
+        self._pending_interactions = 0
+        # Remove persisted index files
+        for p in (self.index_path, self.meta_path):
+            if p.exists():
+                p.unlink()
 
     def recent(self, n: int = 6) -> list[dict]:
         conn = sqlite3.connect(self.db_path)
@@ -146,9 +154,7 @@ class Memory:
             return []
         return self.reward_vector.search(qv, k)
 
-    # ------------------------------------------------------------------
     # Index rebuild helpers
-    # ------------------------------------------------------------------
 
     def _rebuild_vector_index(self) -> None:
         conn = sqlite3.connect(self.db_path)

@@ -44,10 +44,7 @@ try:
 except ImportError:
     HAS_BM25 = False
 
-
-# ---------------------------------------------------------------------------
 # Triplet extraction prompt (unchanged from v3)
-# ---------------------------------------------------------------------------
 
 TRIPLET_EXTRACTION_PROMPT = """Bạn là hệ thống trích xuất tri thức từ tài liệu đại học.
 Từ đoạn văn bản, hãy trích xuất các quan hệ quan trọng dưới dạng triplet.
@@ -67,31 +64,33 @@ Văn bản:
 {text}
 """
 
-# ---------------------------------------------------------------------------
 # NEW: Rich entity extraction prompt (EHRAG enhancement)
-# ---------------------------------------------------------------------------
 
 ENTITY_EXTRACTION_PROMPT = """Từ đoạn văn bản này, trích xuất TẤT CẢ thực thể quan trọng.
 
-Loại thực thể:
-- RULE: điều khoản, quy định (vd: Điều 15, Khoản 3.2)
-- SUBJECT: môn học, học phần, ngành
-- AMOUNT: số tiền, tín chỉ, điểm số, %
-- DATE: ngày, học kỳ, năm học, thời hạn
-- ORG: phòng, khoa, trường, ban
-- PERSON: tên người, chức danh
-- CONDITION: điều kiện, yêu cầu, tiêu chuẩn
-- PROCESS: thủ tục, quy trình, bước
+Tự xác định loại thực thể (type) phù hợp với nội dung — không bắt buộc dùng nhãn cố định.
+Ví dụ gợi ý: quy_dinh, hoc_phan, so_luong, thoi_han, to_chuc, dieu_kien, quy_trinh, chuc_danh
 
-Chỉ trả JSON: {{"entities": [{{"name": "...", "type": "RULE|SUBJECT|AMOUNT|DATE|ORG|PERSON|CONDITION|PROCESS"}}]}}
+Ưu tiên thực thể có giá trị tra cứu cao: điều khoản cụ thể, số liệu, điều kiện, tên quy định.
+Bỏ qua từ chung chung không có giá trị thông tin.
+
+Chỉ trả JSON (không markdown): {{"entities": [{{"name": "tên cụ thể", "type": "loại tự xác định"}}]}}
 
 Văn bản: {text}"""
 
-# ---------------------------------------------------------------------------
 # Edge weights for graph traversal
-# ---------------------------------------------------------------------------
 
 RELATION_WEIGHTS: dict[str, float] = {
+    # Structural (fixed — these come from code, not LLM)
+    "has_section":     0.8,
+    "has_chunk":       0.7,
+    "mentioned_in":    0.6,
+    "contains_entity": 0.6,
+    "co_occurs_with":  0.9,
+    "is_type":         0.5,
+    "defines":         1.5,
+    # Semantic (suggested examples — LLM may produce other names)
+    # Any relation NOT in this dict gets _DEFAULT_RELATION_WEIGHT
     "co_tien_quyet":   2.0,
     "quy_dinh_ve":     1.8,
     "yeu_cau":         1.7,
@@ -102,17 +101,13 @@ RELATION_WEIGHTS: dict[str, float] = {
     "quan_ly":         1.2,
     "to_chuc_boi":     1.1,
     "lien_quan_den":   1.0,
-    "co_occurs_with":  0.9,   # NEW: co-occurrence
-    "has_section":     0.8,
-    "has_chunk":       0.7,
-    "mentioned_in":    0.6,
-    "contains_entity": 0.6,
-    "is_type":         0.5,   # NEW: entity-type edge
+    "relates_to":      1.0,
 }
 
-# ---------------------------------------------------------------------------
+# Dynamic fallback: unknown LLM-generated relation names get this weight
+_DEFAULT_RELATION_WEIGHT = 1.0
+
 # Vietnamese unaccent helper
-# ---------------------------------------------------------------------------
 
 def _build_unaccent_table() -> dict:
     _groups = [
@@ -131,18 +126,13 @@ def _build_unaccent_table() -> dict:
             table[ord(c.upper())] = ord(rep)
     return table
 
-
 _UNACCENT_MAP = str.maketrans(_build_unaccent_table())
-
 
 def _unaccent(text: str) -> str:
     """Strip Vietnamese diacritics -> ASCII lowercase."""
     return text.lower().translate(_UNACCENT_MAP)
 
-
-# ---------------------------------------------------------------------------
 # Doc-type boost embeddings
-# ---------------------------------------------------------------------------
 
 _DOC_TYPE_DESCRIPTIONS: dict[str, str] = {
     "hoc_phi":      "học phí, chi phí học tập, tiền đóng học, miễn giảm học phí",
@@ -153,9 +143,7 @@ _DOC_TYPE_DESCRIPTIONS: dict[str, str] = {
     "thong_bao":    "thông báo, thông tin cập nhật, thông cáo, thư ngỏ",
 }
 
-# ---------------------------------------------------------------------------
 # Vietnamese tokenizer (BM25)
-# ---------------------------------------------------------------------------
 
 _VI_PATTERN = re.compile(
     r'[a-záàảãạăắằẳẵặâấầẩẫậéèẻẽẹêếềểễệíìỉĩịóòỏõọôốồổỗộơớờởỡợ'
@@ -163,15 +151,15 @@ _VI_PATTERN = re.compile(
     re.UNICODE,
 )
 
-
 def _tokenize_vi(text: str) -> list[str]:
-    """Tokenize Vietnamese text for BM25 (min 2-char tokens)."""
-    return [t for t in _VI_PATTERN.findall(text.lower()) if len(t) >= 2]
+    """Tokenize Vietnamese text for BM25.
+    Keeps tokens >= 2 chars OR pure digits so article numbers like '9', '15'
+    are not dropped — they are critical for article-specific lookups.
+    """
+    return [t for t in _VI_PATTERN.findall(text.lower())
+            if len(t) >= 2 or t.isdigit()]
 
-
-# ---------------------------------------------------------------------------
 # GraphRAG
-# ---------------------------------------------------------------------------
 
 class GraphRAG:
     """
@@ -222,9 +210,7 @@ class GraphRAG:
         # Cache: chunk texts keyed by chunk_id for topic scoring
         self._chunk_text_cache: dict[str, str] = {}
 
-    # ------------------------------------------------------------------
     # Build
-    # ------------------------------------------------------------------
 
     def build(self, chunks: list[Chunk]) -> None:
         """
@@ -283,9 +269,7 @@ class GraphRAG:
         # 5. EHRAG hypergraph
         self._build_hypergraph(chunks)
 
-    # ------------------------------------------------------------------
     # Contextual text enrichment
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _enrich_chunk_text(chunk: Chunk) -> str:
@@ -300,9 +284,7 @@ class GraphRAG:
         prefix = " | ".join(parts)
         return f"[{prefix}]\n{chunk.text}" if prefix else chunk.text
 
-    # ------------------------------------------------------------------
     # Graph construction
-    # ------------------------------------------------------------------
 
     def _add_chunk_to_graph(self, chunk: Chunk) -> None:
         """
@@ -340,7 +322,7 @@ class GraphRAG:
         parent = section_node or doc_node
         self.graph.add_edge(parent, chunk_node, relation="has_chunk", weight=0.7)
 
-        # ── Triplet extraction ─────────────────────────────────────────
+        # Triplet extraction
         triplet_entities: set[str] = set()
         for t in self._extract_triplets(chunk.text):
             subj = (t.get("subject") or "").strip()
@@ -362,7 +344,7 @@ class GraphRAG:
             triplet_entities.add(subj)
             triplet_entities.add(obj)
 
-        # ── Rich entity extraction (EHRAG) ────────────────────────────
+        # Rich entity extraction (EHRAG)
         chunk_entities: list[tuple[str, str]] = []   # (name, type)
         if settings.entity_extract_enabled:
             raw_entities = self._extract_entities(chunk.text)
@@ -398,7 +380,7 @@ class GraphRAG:
                     if not self.graph.has_edge(en, type_node):
                         self.graph.add_edge(en, type_node, relation="is_type", weight=0.5)
 
-        # ── Co-occurrence edges (EHRAG enhancement) ────────────────────
+        # Co-occurrence edges (EHRAG enhancement)
         # All entity pairs within the same chunk get a co-occurrence edge.
         # Includes both triplet entities and rich-extracted entities.
         all_chunk_entity_names = list(triplet_entities) + [n for n, _ in chunk_entities]
@@ -479,9 +461,7 @@ class GraphRAG:
         else:
             self.entity_vecs = None
 
-    # ------------------------------------------------------------------
     # EHRAG hypergraph construction
-    # ------------------------------------------------------------------
 
     def _build_hypergraph(self, chunks: list[Chunk]) -> None:
         """
@@ -582,15 +562,13 @@ class GraphRAG:
         except Exception as exc:
             print(f"[Hypergraph] Build error: {exc} — hypergraph disabled.")
 
-    # ------------------------------------------------------------------
     # Load
-    # ------------------------------------------------------------------
 
     def load(self) -> None:
         """Load all indices from storage."""
         self.vector.load()
 
-        # ── Dimension guard ────────────────────────────────────────────────
+        # Dimension guard
         # If the stored FAISS index was built with a different embedding model
         # (different output dimension), queries will throw a FAISS shape error.
         # Catch this early with a clear message so the user knows to re-ingest.
@@ -650,9 +628,7 @@ class GraphRAG:
         """Return True if the minimum required indices exist."""
         return self.vector.exists() and settings.graph_path.exists()
 
-    # ------------------------------------------------------------------
     # Query batch
-    # ------------------------------------------------------------------
 
     def query_batch(
         self,
@@ -702,9 +678,7 @@ class GraphRAG:
 
         return {"dense_hits": all_dense, "graph_hits": all_graph}
 
-    # ------------------------------------------------------------------
     # Query — single query entry point
-    # ------------------------------------------------------------------
 
     def query(
         self,
@@ -757,9 +731,7 @@ class GraphRAG:
             "graph_hits": graph_hits,
         }
 
-    # ------------------------------------------------------------------
     # EHRAG hypergraph re-scoring
-    # ------------------------------------------------------------------
 
     def _hypergraph_rescore(
         self,
@@ -826,9 +798,7 @@ class GraphRAG:
             )
             return hits
 
-    # ------------------------------------------------------------------
     # Parallel retrieval
-    # ------------------------------------------------------------------
 
     def _retrieve_parallel(
         self,
@@ -853,9 +823,7 @@ class GraphRAG:
 
         return dense_hits, bm25_hits, graph_hits
 
-    # ------------------------------------------------------------------
     # Individual search methods
-    # ------------------------------------------------------------------
 
     def _dense_search(self, qv: np.ndarray, k: int) -> list[dict]:
         hits = self.vector.search(qv, k=k)
@@ -881,9 +849,7 @@ class GraphRAG:
             results.append(item)
         return results
 
-    # ------------------------------------------------------------------
     # RRF fusion
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _rrf_fuse(
@@ -910,9 +876,7 @@ class GraphRAG:
             fused.append(item)
         return fused
 
-    # ------------------------------------------------------------------
     # Unified fusion dispatcher
-    # ------------------------------------------------------------------
 
     def _fuse(
         self,
@@ -932,9 +896,7 @@ class GraphRAG:
             return self._rrf_fuse(non_empty, id_key=id_key, rrf_k=settings.rrf_k)
         return dense_hits or bm25_hits or graph_hits or []
 
-    # ------------------------------------------------------------------
     # QDAP-S fusion
-    # ------------------------------------------------------------------
 
     @staticmethod
     def _minmax_normalize(score_dict: dict[str, float]) -> dict[str, float]:
@@ -1036,9 +998,7 @@ class GraphRAG:
         results.sort(key=lambda x: x.get("score", 0.0), reverse=True)
         return results
 
-    # ------------------------------------------------------------------
     # Doc-type intent boost
-    # ------------------------------------------------------------------
 
     def _doc_type_boost(self, hits: list[dict], query: str) -> list[dict]:
         """Multiply score by boost factor when query intent matches doc_type."""
@@ -1070,9 +1030,7 @@ class GraphRAG:
         hits.sort(key=lambda x: x.get("score", 0.0), reverse=True)
         return hits
 
-    # ------------------------------------------------------------------
     # Entity linking (embedding similarity)
-    # ------------------------------------------------------------------
 
     def _entity_link_embedding(self, qv: np.ndarray, top_k: int = 8) -> list[str]:
         """Return top-k entity node names linked to query via embedding similarity."""
@@ -1090,9 +1048,7 @@ class GraphRAG:
                 linked.append(node)
         return linked
 
-    # ------------------------------------------------------------------
     # Graph retrieval — entity linking + ego-graph + local PPR
-    # ------------------------------------------------------------------
 
     def _graph_retrieve(
         self,
@@ -1157,9 +1113,7 @@ class GraphRAG:
             })
         return results
 
-    # ------------------------------------------------------------------
     # Local-subgraph Personalised PageRank
-    # ------------------------------------------------------------------
 
     def _ppr_local(
         self,
@@ -1214,9 +1168,7 @@ class GraphRAG:
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores[:top_k]
 
-    # ------------------------------------------------------------------
     # Weighted BFS (PPR fallback)
-    # ------------------------------------------------------------------
 
     def _weighted_bfs(
         self,
@@ -1237,7 +1189,7 @@ class GraphRAG:
             for node, pw in frontier:
                 for nbr in self.graph.successors(node):
                     ed  = self.graph.get_edge_data(node, nbr) or {}
-                    rw  = RELATION_WEIGHTS.get(ed.get("relation", ""), 1.0)
+                    rw  = RELATION_WEIGHTS.get(ed.get("relation", ""), _DEFAULT_RELATION_WEIGHT)
                     s   = pw * rw * decay
                     node_scores[nbr] = node_scores.get(nbr, 0.0) + s
                     if nbr not in visited:
@@ -1251,9 +1203,7 @@ class GraphRAG:
         scores.sort(key=lambda x: x[1], reverse=True)
         return scores[:top_k]
 
-    # ------------------------------------------------------------------
     # LLM triplet extraction
-    # ------------------------------------------------------------------
 
     def _extract_triplets(self, text: str) -> list[dict[str, str]]:
         """Extract knowledge triplets from text using LLM."""
@@ -1272,9 +1222,7 @@ class GraphRAG:
         except Exception:
             return []
 
-    # ------------------------------------------------------------------
     # NEW: Rich entity extraction (EHRAG)
-    # ------------------------------------------------------------------
 
     def _extract_entities(self, text: str) -> list[dict[str, str]]:
         """
@@ -1297,9 +1245,7 @@ class GraphRAG:
         except Exception:
             return []
 
-    # ------------------------------------------------------------------
     # Verbalized relation paths (for critic context)
-    # ------------------------------------------------------------------
 
     def _find_relation_path(self, seed_nodes: list[str], target: str) -> str:
         """Find and format the shortest relation path from any seed to target."""
@@ -1317,9 +1263,7 @@ class GraphRAG:
                 continue
         return ""
 
-    # ------------------------------------------------------------------
     # Online QDAP-S learning
-    # ------------------------------------------------------------------
 
     def update_qdap_online(self, reward: float) -> None:
         """

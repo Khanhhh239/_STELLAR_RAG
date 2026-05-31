@@ -6,7 +6,7 @@ score (query, passage) pairs after the bi-encoder + BM25 + graph RRF fusion
 step.  Literature result: MRR@3 jumps ~0.10 versus bi-encoder-only retrieval.
 
 Design decisions
-----------------
+
 * **Lazy singleton** — model is downloaded and loaded only on first call when
   RERANKER_ENABLED=true.  Import-time cost is zero.
 * **Top-K pooling** — only the top `reranker_top_k` fused candidates are
@@ -29,7 +29,6 @@ from config import settings
 
 logger = logging.getLogger(__name__)
 
-
 class Reranker:
     """
     Cross-encoder reranker — lazy-loaded singleton.
@@ -44,9 +43,7 @@ class Reranker:
     _instance:  "Reranker | None" = None
     _available: bool | None = None   # None = not yet tested
 
-    # ------------------------------------------------------------------
     # Singleton factory
-    # ------------------------------------------------------------------
 
     @classmethod
     def get(cls) -> "Reranker | None":
@@ -82,9 +79,7 @@ class Reranker:
         logger.info(f"[Reranker] loaded '{settings.reranker_model}'")
         return obj
 
-    # ------------------------------------------------------------------
     # Rerank
-    # ------------------------------------------------------------------
 
     def rerank(
         self,

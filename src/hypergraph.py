@@ -57,10 +57,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-
-# ---------------------------------------------------------------------------
 # EntityHypergraph
-# ---------------------------------------------------------------------------
 
 class EntityHypergraph:
     """
@@ -100,9 +97,8 @@ class EntityHypergraph:
 
         self._built: bool = False
 
-    # ------------------------------------------------------------------
+   
     # Build
-    # ------------------------------------------------------------------
 
     def build(
         self,
@@ -142,7 +138,7 @@ class EntityHypergraph:
         entity_idx: dict[str, int] = {name: i for i, name in enumerate(entity_names)}
         chunk_idx:  dict[str, int] = {cid: j for j, cid in enumerate(self.chunk_ids)}
 
-        # ── Build H^str (E × C) ────────────────────────────────────────
+        #  Build H^str (E × C)
         logger.info(f"[Hypergraph] Building H^str  E={E} C={C}")
         H_str_lil = lil_matrix((E, C), dtype=np.float32)
 
@@ -158,7 +154,7 @@ class EntityHypergraph:
         self._H_str = H_str_lil.tocsr()
         logger.info(f"[Hypergraph] H^str nnz={self._H_str.nnz}")
 
-        # ── Build H^sem (E × K) via BIRCH clustering ───────────────────
+        #  Build H^sem (E × K) via BIRCH clustering 
         self._build_semantic_hyperedges(entity_vecs=self.entity_vecs)
         self._built = True
 
@@ -254,9 +250,7 @@ class EntityHypergraph:
         self._H_sem = H_sem_lil.tocsr()
         logger.info(f"[Hypergraph] H^sem nnz={self._H_sem.nnz}")
 
-    # ------------------------------------------------------------------
     # Hybrid diffusion retrieval
-    # ------------------------------------------------------------------
 
     def diffuse(
         self,
@@ -307,7 +301,7 @@ class EntityHypergraph:
 
         qv = np.asarray(query_vec, dtype=np.float32).squeeze()   # (d,)
 
-        # ── Initialise a^(0) from seed entity scores ─────────────────────
+        # Initialise a^(0) from seed entity scores
         a = np.zeros(E, dtype=np.float32)
         entity_idx = {name: i for i, name in enumerate(self.entity_names)}
 
@@ -332,7 +326,7 @@ class EntityHypergraph:
         if a.sum() == 0:
             return {}, {}
 
-        # ── Step 1: Semantic one-off expansion ───────────────────────────
+        #  Step 1: Semantic one-off expansion
         if self._H_sem is not None:
             try:
                 # a_sem = γ · H^sem · (H^sem)^T · a
@@ -342,7 +336,7 @@ class EntityHypergraph:
             except Exception as exc:
                 logger.debug(f"[Hypergraph] Semantic expansion failed: {exc}")
 
-        # ── Step 2: Structural iterative propagation ─────────────────────
+        #  Step 2: Structural iterative propagation 
         C = len(self.chunk_ids)
         cumulative_w = np.zeros(E, dtype=np.float32)
 
@@ -384,14 +378,14 @@ class EntityHypergraph:
                 logger.debug(f"[Hypergraph] Structural propagation iter {_t} failed: {exc}")
                 break
 
-        # ── Collect entity weights ────────────────────────────────────────
+        #  Collect entity weights 
         entity_weights: dict[str, float] = {}
         for i, name in enumerate(self.entity_names):
             w = float(cumulative_w[i])
             if w > 0:
                 entity_weights[name] = w
 
-        # ── Compute cluster activation scores ────────────────────────────
+        #  Compute cluster activation scores 
         cluster_scores: dict[int, float] = {}
         if self.cluster_ids is not None and self.n_clusters > 0:
             for k in range(self.n_clusters):
@@ -402,9 +396,7 @@ class EntityHypergraph:
 
         return entity_weights, cluster_scores
 
-    # ------------------------------------------------------------------
     # Topic-aware scoring
-    # ------------------------------------------------------------------
 
     def topic_score_chunks(
         self,
@@ -509,9 +501,7 @@ class EntityHypergraph:
         result.sort(key=lambda x: x.get("score", 0.0), reverse=True)
         return result
 
-    # ------------------------------------------------------------------
     # Persist / restore
-    # ------------------------------------------------------------------
 
     def save(self, directory: Path) -> None:
         """

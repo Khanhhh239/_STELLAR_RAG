@@ -1,116 +1,136 @@
-# STELLAR-RAG v4 — EHRAG + HybGRAG Hybrid Retrieval System
+# STELLAR-RAG v4
 
-Vietnamese university Q&A system combining hypergraph-enhanced retrieval
-(EHRAG, arxiv 2604.17458) with agentic critic validation (HybGRAG, arxiv
-2412.16311) on top of the STELLAR-RAG v3 QDAP-S fusion baseline.
+Vietnamese university Q&A system with EHRAG hypergraph retrieval and HybGRAG critic validation.
 
-## Architecture
+**Papers implemented:**
+- EHRAG: Entity Hypergraph for Retrieval-Augmented Generation (arXiv 2604.17458)
+- HybGRAG: Hybrid Retrieval-Augmented Generation (arXiv 2412.16311)
+
+---
+
+## Architecture overview
 
 ```
 Query
   |
-  v
-[InputGuardrail]    -- injection detection + LLM safety classifier
+[InputGuardrail]       -- injection detection + safety classification
   |
-  v
-[QueryProcessor]    -- heuristic or LLM entity extraction + sub-query split
+[LRU Cache]            -- 256-entry thread-safe cache
   |
-  v
-[QueryExpander]     -- LLM paraphrase variants (robustness)
+[QueryProcessor]       -- entity extraction + sub-query split
   |
-  v
-[QueryRouter]       -- simple / compound / complex tier
+[QueryRouter]          -- complexity: simple | medium | complex
   |
-  v
-[HyDE]              -- hypothetical document embedding (complex only)
+[QueryExpander]        -- LLM paraphrase variants (skip if simple)
   |
-  v
-  +-------- BM25 search --------+
-  |                              |
-  +---- Dense FAISS search -----+-- parallel
-  |                              |
-  +---- Graph PPR retrieval ----+
+[HyDE]                 -- hypothetical document embedding (analytical+complex only)
   |
-  v
-[QDAP-S Fusion]     -- query-adaptive alpha prediction for dense/sparse blend
++-- HybGRAG Critic Loop (max 3 iterations) ---+
+|                                              |
+|  +-- Parallel retrieval --+                 |
+|  | BM25 | FAISS/bge-m3 | Graph |           |
+|  +----------+-------------+                 |
+|             |                               |
+|  [QDAP-S Fusion]   -- query-adaptive blend  |
+|  [Doc-type Boost]  -- intent boost          |
+|  [EHRAG Rescore]   -- hypergraph diffusion  |
+|  [CE Reranker]     -- CrossEncoder top-20   |
+|  [Self-RAG]        -- quality check         |
+|  [Critic Validator] -- sufficient? -> break |
+|  [Critic Commenter] -> enrich query         |
++----------------------------------------------+
   |
-  v
-[Doc-type Boost]    -- embedding-based intent -> doc_type boost
+[Context Assembly]     -- MMR diversity + score-proportional budget
   |
-  v
-[EHRAG Hypergraph Diffusion]
-  |  1. Seed entity scores from dense retrieval (embedding similarity)
-  |  2. Semantic expansion via H^sem (BIRCH cluster hyperedges)
-  |  3. Structural propagation via H^str (co-occurrence/chunk hyperedges)
-  |  4. Topic-aware 3-component re-scoring:
-  |       S(d) = S_dense + lambda1 * entity_evidence + lambda2 * cluster_term
+[LLM Generation]       -- Ollama (primary) or Cloud LLM (secondary/dual)
   |
-  v
-[CE Reranker]       -- optional CrossEncoder (top-20 candidates)
+[OutputGuardrail]      -- grounding check
   |
-  v
-[HybGRAG Critic Loop]  max 3 iterations
-  |  Validator: "Is this context sufficient?"  (qwen2.5:0.5b)
-  |  Commenter: "What information is missing?" (structured feedback)
-  |  Enrich query -> re-retrieve if insufficient
-  |
-  v
-[Context Assembly]  -- MMR diversity + proportional char budget
-  |
-  v
-[LLM Generation]    -- qwen2.5:7b-instruct (streaming or blocking)
-  |
-  v
-[OutputGuardrail]   -- grounding check + hallucination marker detection
-  |
-  v
 Answer
 ```
 
-## New Features vs v3
+---
 
-| Feature | v3 | v4 |
-|---------|----|----|
-| Entity extraction | Triplets only (~2-5/chunk) | Triplets + ALL named entities with type classification |
-| Co-occurrence edges | No | Yes (all entity pairs in same chunk) |
-| Semantic clustering | No | BIRCH auto-clustering of entity embeddings |
-| Structural hyperedge | No | H^str incidence matrix (scipy.sparse) |
-| Semantic hyperedge | No | H^sem Gaussian-weighted cluster connections |
-| Diffusion retrieval | No | 3-iteration structural propagation + 1-shot semantic |
-| Topic-aware scoring | No | 3-component: dense + entity_evidence + cluster_term |
-| Critic validation | No | HybGRAG validator + commenter (up to 3 refinement iters) |
-| Verbalized paths | Used for display only | Passed to critic validator for evidence |
-| Entity types | None | RULE, SUBJECT, AMOUNT, DATE, ORG, PERSON, CONDITION, PROCESS |
-| Memory usage | Low | CPU-safe: scipy.sparse, batched embedding, 50k entity cap |
+## Project structure
+
+```
+STELLAR-RAG/
++-- README.md
++-- requirements.txt
++-- .env.example
++-- .gitignore
++-- app.py                       # interactive chat entry point
++-- ingest.py                    # ingest pipeline (PDF -> FAISS + BM25 + Graph + Hypergraph)
++-- src/                         # core library modules
+|   +-- agent.py
+|   +-- graphrag.py
+|   +-- hypergraph.py
+|   +-- critic.py
+|   +-- llm_client.py
+|   +-- cloud_llm_client.py
+|   +-- config.py
+|   +-- embedding.py
+|   +-- vector_store.py
+|   +-- qdap.py
+|   +-- memory.py
+|   +-- reranker.py
+|   +-- router.py
+|   +-- guardrail.py
+|   +-- query_expander.py
+|   +-- pdf_extractor.py
+|   +-- pdf_pipeline.py
+|   +-- ner_extractor.py
+|   +-- speech.py
+|   +-- stt_worker.py
+|   +-- rlhf.py
++-- scripts/                     # operational/maintenance scripts
+|   +-- rlhf_train.py
+|   +-- verify_chunks.py
++-- eval/                        # evaluation suite
+|   +-- evaluate.py
+|   +-- pipeline.py
+|   +-- metrics.py
+|   +-- qa_dataset.json
+|   +-- results/
++-- data/
+|   +-- raw/                     # input PDF files
+|   +-- processed/               # chunks.json + full OCR text
++-- storage/                     # index and model files (git-ignored, built at runtime)
++-- docs/
+    +-- ARCHITECTURE.md
+    +-- RETRIEVAL_PIPELINE.md
+    +-- IMPROVEMENTS.md
+    +-- HYPERGRAPH_EHRAG.md
+    +-- MATH_FOUNDATIONS.md
+```
+
+---
 
 ## Installation
 
 ### Prerequisites
+
 - Python 3.11+
 - [Ollama](https://ollama.ai) running locally
-- Models: `ollama pull qwen2.5:7b-instruct` and `ollama pull nomic-embed-text`
-- Optional (critic): `ollama pull qwen2.5:0.5b`
+- Pull required models:
+
+```bash
+ollama pull qwen2.5:7b-instruct
+ollama pull qwen2.5:0.5b
+```
 
 ### Setup
 
 ```bash
-cd C:\Users\Admin\Downloads\improve_RAG
+cd STELLAR-RAG
 
 python -m venv .venv
+
+# With GPU (CUDA 12.4)
 .venv\Scripts\pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cu124
-```
 
-**If you have no GPU** (CPU-only):
-```bash
-.venv\Scripts\pip install torch>=2.0.0
-.venv\Scripts\pip install -r requirements.txt --no-deps
-.venv\Scripts\pip install ollama python-dotenv networkx numpy faiss-cpu sentence-transformers PyMuPDF Pillow easyocr sympy==1.13.1 rapidfuzz tqdm rank_bm25 scipy scikit-learn
-```
-
-### New dependencies vs v3
-```
-scipy>=1.11.0        # sparse hyperedge matrices (H^str, H^sem)
-scikit-learn>=1.3.0  # BIRCH clustering for semantic hyperedges
+# CPU-only
+.venv\Scripts\pip install -r requirements.txt
 ```
 
 ### Configuration
@@ -120,136 +140,278 @@ Copy `.env.example` to `.env` and edit:
 ```env
 OLLAMA_HOST=http://localhost:11434
 OLLAMA_MODEL=qwen2.5:7b-instruct
-EMBEDDING_BACKEND=ollama
-EMBED_MODEL=nomic-embed-text
-USE_GPU=true
+EMBEDDING_BACKEND=sentence_transformers
+EMBED_MODEL=BAAI/bge-m3
+
+# Optional: Cloud LLM for dual-answer mode and graph extraction
+CLOUD_PROVIDER=groq
+CLOUD_API_KEY=gsk_...
+CLOUD_MODEL=llama-3.3-70b-versatile
+CLOUD_GRAPH_MODEL=llama-3.1-8b-instant        # entity+relation mode (--no-ner)
+CLOUD_RELATION_MODEL=llama-3.3-70b-versatile  # relation-only mode (NER default)
+
+# NER settings — ingest pipeline only, no effect at query time
+NER_MODEL=NlpHUST/ner-vietnamese-electra-base
+NER_DEVICE=-1          # -1 = CPU (recommended), 0 = first GPU
+NER_MIN_SCORE=0.70     # minimum confidence to accept an NER span
 ```
+
+---
 
 ## Usage
 
-### Ingest PDFs
+### 1. Ingest PDFs
 
-Place PDF files in `data/raw/` and run:
+Place PDF files in `data/raw/` then run:
 
 ```bash
+# Default: NER entities (local) + LLaMA 70B relations (Groq cloud)
 .venv\Scripts\python ingest.py
+
+# Original mode: LLM extracts both entities and relations (no NER pre-pass)
+.venv\Scripts\python ingest.py --no-ner
+
+# Skip all LLM graph extraction: fast regex NER only (no API key needed)
+.venv\Scripts\python ingest.py --skip-graph
+
+# Dry run: list files and exit
+.venv\Scripts\python ingest.py --dry-run
 ```
 
-This builds:
-- `storage/docs.faiss` + `storage/docs_meta.json` — dense FAISS index
-- `storage/bm25_index.pkl` — BM25 index
-- `storage/knowledge.graphml` — knowledge graph
-- `storage/entity_vecs.npy` + `storage/entity_names.json` — entity index
-- `storage/hypergraph/` — EHRAG hypergraph artefacts (H^str, H^sem, clusters)
-- `storage/chunk_vecs.npy` + `storage/chunk_ids.json` — chunk embeddings for diffusion
+**Graph extraction modes:**
 
-### Chat
+| Mode | Entity source | Relation source | API tokens | Notes |
+|------|--------------|-----------------|------------|-------|
+| Default (NER+LLM) | NER model (local) | LLaMA 70B (Groq) | ~500/call | Recommended |
+| `--no-ner` | LLM (cloud) | LLM (cloud) | ~1000/call | Original behavior |
+| `--skip-graph` | Regex only | Regex only | 0 | No API key needed |
+
+The NER model (`NlpHUST/ner-vietnamese-electra-base`, ~270 MB) downloads automatically on first ingest. It runs on CPU and is unloaded before the cloud LLM phase to minimise peak RAM usage.
+
+Ingest builds:
+
+| File | Description |
+|------|-------------|
+| `storage/docs.faiss` | FAISS dense index |
+| `storage/docs_meta.json` | Chunk metadata |
+| `storage/bm25_index.pkl` | BM25 index |
+| `storage/knowledge.graphml` | Knowledge graph (NetworkX DiGraph) |
+| `storage/entity_vecs.npy` | Entity embeddings |
+| `storage/entity_names.json` | Entity name list |
+| `storage/chunk_vecs.npy` | Chunk embeddings for hypergraph diffusion |
+| `storage/chunk_ids.json` | Chunk ID list |
+| `storage/hypergraph/` | EHRAG hypergraph artefacts (H^str, H^sem) |
+
+### 2. Verify chunk quality
+
+```bash
+.venv\Scripts\python scripts/verify_chunks.py
+```
+
+### 3. Chat
 
 ```bash
 .venv\Scripts\python app.py
 ```
 
-### Evaluation
+On startup, choose:
+
+- **T** -- Text mode (keyboard input)
+- **S** -- Speech mode (Vietnamese voice input via PhoWhisper + edge-tts output)
+
+Then choose answer mode:
+
+- **1** -- Single LLM (follows `LLM_BACKEND` setting)
+- **2** -- Dual mode (Ollama + Cloud LLM in parallel)
+
+Special commands during chat:
+
+| Command | Action |
+|---------|--------|
+| `exit` / `quit` | Exit the chat |
+| `?debug` | Show retrieval context, hit scores, and LLM prompt |
+| `?clear-memory` | Wipe conversation memory and cache |
+
+After each answer, type a rating `1-5` to update QDAP-S online (press Enter to skip).
+
+### 4. Evaluation
+
+Two eval scripts — pick based on what you need:
+
+| Script | LLM judge | Retrieval trace | Use when |
+|--------|-----------|-----------------|----------|
+| `evaluate.py` | Yes (Ollama scores 0–10) | No | Final quality assessment |
+| `pipeline.py` | No (auto nDCG/grounding) | Yes (top chunks, scores) | Daily retrieval debugging |
+
+---
+
+**`evaluate.py`** — full eval with LLM-as-judge + composite scoring:
 
 ```bash
-.venv\Scripts\python eval_pipeline.py [eval_prompts.txt]
+# Single LLM (Ollama only)
+.venv\Scripts\python eval/evaluate.py
+
+# Dual mode: compare Ollama vs Cloud LLM side-by-side
+.venv\Scripts\python eval/evaluate.py --dual
+
+# Filter by category; limit to 10 questions
+.venv\Scripts\python eval/evaluate.py --dual --category medium --limit 10
+
+# Start from question N (skip Q1–Q9)
+.venv\Scripts\python eval/evaluate.py --start 10
+
+# Continue a stopped run: start from Q10, merge Q1–Q9 from checkpoint
+.venv\Scripts\python eval/evaluate.py --start 10 --resume eval/results/eval_single_20260531_143022.json
+
+# Same in dual mode
+.venv\Scripts\python eval/evaluate.py --dual --start 10 --resume eval/results/eval_dual_20260531_143022.json
 ```
 
-## Configuration Reference
+> Results are auto-saved to `eval/results/eval_single_YYYYMMDD_HHMMSS.json` (every 5 questions).  
+> Pass that file to `--resume` to continue exactly where you stopped.
 
-All settings can be overridden via environment variables.
+---
 
-### EHRAG Hypergraph Settings
+**`pipeline.py`** — lightweight debug pipeline (retrieval trace, nDCG, grounding):
+
+```bash
+# Run all questions (qa_dataset.json, no eval_prompts.txt needed)
+.venv\Scripts\python eval/pipeline.py eval/qa_dataset.json
+
+# Dual mode (Ollama + Cloud)
+.venv\Scripts\python eval/pipeline.py eval/qa_dataset.json --dual
+
+# Filter by category; first 5 questions only
+.venv\Scripts\python eval/pipeline.py eval/qa_dataset.json --category hard --limit 5
+
+# Start from question 10
+.venv\Scripts\python eval/pipeline.py eval/qa_dataset.json --start 10
+
+# Continue stopped run: start from Q10, merge Q1–Q9 from prior report
+.venv\Scripts\python eval/pipeline.py eval/qa_dataset.json --start 10 --resume eval/eval_report.json
+
+# Dual mode from Q10
+.venv\Scripts\python eval/pipeline.py eval/qa_dataset.json --dual --start 10 --resume eval/eval_report.json
+```
+
+> Output: `eval/eval_report.json` (all results merged) + `eval/eval_log.txt` (detailed trace per question).
+
+---
+
+**Shared flags (both scripts):**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--start N` | 1 | Start from question number N (1-based), skip Q1..Q(N-1) |
+| `--resume FILE` | — | Load prior results from FILE and merge into output |
+| `--dual` | off | Run Ollama + Cloud LLM in parallel |
+| `--category` | all | Filter: `easy` / `medium` / `hard` |
+| `--limit N` | 0 (all) | Stop after N questions |
+
+**Typical workflow for a stopped run:**
+
+```
+Run → stopped at Q9 → results saved
+         ↓
+--start 10 --resume <saved_file>   # continue from Q10, final file has Q1–Q60
+```
+
+### 5. Offline RLHF training
+
+```bash
+# Full batch update + export JSONL
+.venv\Scripts\python scripts/rlhf_train.py
+
+# Incremental (only new feedback since last run)
+.venv\Scripts\python scripts/rlhf_train.py --incremental
+
+# Export JSONL only, no QDAP update
+.venv\Scripts\python scripts/rlhf_train.py --export-only
+
+# Dry run (stats only)
+.venv\Scripts\python scripts/rlhf_train.py --dry-run
+```
+
+RLHF exports:
+
+| File | Format |
+|------|--------|
+| `eval/rlhf_exports/preference_pairs.jsonl` | DPO pairs (chosen / rejected) |
+| `eval/rlhf_exports/sft_positives.jsonl` | SFT positives (reward >= 4) |
+
+---
+
+## Speech mode (STT + TTS)
+
+| Component | Technology | Notes |
+|-----------|-----------|-------|
+| STT | PhoWhisper-medium (VinAI) | Subprocess isolation -- full VRAM freed before Ollama |
+| TTS | edge-tts vi-VN-HoaiMyNeural | HTTP API, no GPU, requires internet |
+| Recording | sounddevice + soundfile | 16 kHz mono WAV |
+| Playback | pygame.mixer | Overwrites `storage/speech_output.mp3` |
+
+Install speech dependencies:
+
+```bash
+.venv\Scripts\pip install transformers sounddevice soundfile edge-tts pygame torch
+```
+
+---
+
+## Configuration reference
+
+### Core retrieval
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `BIRCH_THRESHOLD` | `0.5` | BIRCH merge distance threshold |
-| `BIRCH_N_CLUSTERS` | (auto) | Number of clusters; unset = auto-detect |
-| `HYPERGRAPH_TOP_D` | `10` | Top-D nearest entity neighbours per cluster |
-| `HYPERGRAPH_TAU` | `1.0` | Gaussian weight temperature τ |
-| `HYPERGRAPH_GAMMA` | `0.5` | Semantic expansion decay γ |
-| `HYPERGRAPH_DIFFUSE_T` | `3` | Structural propagation iterations T |
-| `HYPERGRAPH_L` | `50` | Top-L chunks in query gating matrix |
-| `HYPERGRAPH_EPSILON` | `0.01` | Activation threshold ε |
-| `HYPERGRAPH_LAMBDA1` | `0.3` | Entity evidence weight λ₁ |
-| `HYPERGRAPH_LAMBDA2` | `0.2` | Cluster topic weight λ₂ |
+| `OLLAMA_MODEL` | `qwen2.5:7b-instruct` | Main generation model |
+| `EMBED_MODEL` | `BAAI/bge-m3` | Embedding model (1024-dim, multilingual) |
+| `EMBEDDING_BACKEND` | `sentence_transformers` | `sentence_transformers` or `ollama` |
+| `TOP_K` | `6` | Final retrieved chunks per query |
+| `FUSION_METHOD` | `qdap_s` | `qdap_s` or `rrf` |
+| `QDAP_GRAPH_WEIGHT` | `0.15` | Graph contribution weight |
+| `HYDE_ENABLED` | `true` | HyDE (analytical complex queries only) |
+| `SELF_RAG_ENABLED` | `true` | Self-RAG quality expansion |
+| `RERANKER_ENABLED` | `true` | CrossEncoder reranking |
+| `EMBED_BATCH_SIZE` | `4` | Embedding batch size (OOM prevention) |
 
-### HybGRAG Critic Settings
+### HybGRAG critic
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `CRITIC_ENABLED` | `true` | Enable/disable critic loop |
 | `CRITIC_MAX_ITERATIONS` | `3` | Max retrieval-refinement iterations |
-| `CRITIC_MODEL` | `qwen2.5:0.5b` | Fast Ollama model for critic calls |
+| `CRITIC_MODEL` | `qwen2.5:0.5b` | Fast model for critic calls |
+| `CRITIC_SKIP_THRESHOLD` | `0.5` | Self-RAG quality threshold to skip critic |
 
-### Entity Extraction Settings
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ENTITY_EXTRACT_ENABLED` | `true` | Rich named entity extraction |
-| `MAX_ENTITIES_PER_CHUNK` | `20` | Max entities extracted per chunk |
-
-### Core Retrieval Settings (unchanged from v3)
+### EHRAG hypergraph
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OLLAMA_MODEL` | `qwen2.5:7b-instruct` | Main LLM model |
-| `EMBED_MODEL` | `nomic-embed-text` | Embedding model |
-| `TOP_K` | `6` | Number of chunks to retrieve |
-| `FUSION_METHOD` | `qdap_s` | `qdap_s` or `rrf` |
-| `QDAP_GRAPH_WEIGHT` | `0.15` | Graph contribution in QDAP fusion |
-| `HYDE_ENABLED` | `true` | Enable HyDE for complex queries |
-| `SELF_RAG_ENABLED` | `true` | Enable Self-RAG quality expansion |
-| `SELF_RAG_THRESHOLD` | `0.15` | Token-overlap threshold for expansion |
-| `RERANKER_ENABLED` | `false` | Enable CrossEncoder reranker |
-| `GUARDRAIL_ENABLED` | `true` | Enable input/output guardrails |
-| `GUARDRAIL_LLM_CLASSIFY` | `false` | Use LLM for safety classification |
-| `QUERY_EXPANSION_ENABLED` | `true` | Enable query paraphrase expansion |
-| `EMBED_BATCH_SIZE` | `32` | Batch size for embedding operations |
+| `BIRCH_THRESHOLD` | `0.5` | BIRCH merge distance |
+| `HYPERGRAPH_DIFFUSE_T` | `3` | Structural propagation iterations |
+| `HYPERGRAPH_LAMBDA1` | `0.3` | Entity evidence weight lambda1 |
+| `HYPERGRAPH_LAMBDA2` | `0.2` | Cluster topic weight lambda2 |
+| `HYPERGRAPH_TAU` | `1.0` | Gaussian temperature tau |
+| `HYPERGRAPH_GAMMA` | `0.5` | Semantic expansion decay gamma |
 
-## Hardware Requirements
+### Cloud LLM
 
-- **CPU-only**: Works fully. All new code (hypergraph.py, critic.py) uses
-  NumPy + scipy only — no CUDA/PyTorch in new modules.
-- **GPU**: Ollama handles GPU for LLM inference. PyTorch optional for
-  sentence-transformers backend; set `EMBEDDING_BACKEND=ollama` for CPU-only.
-- **RAM**: BIRCH clustering is skipped automatically if entity count > 50,000.
-  scipy.sparse keeps hyperedge matrices memory-efficient for typical corpora.
-  Recommended: 8 GB RAM minimum.
-- **Disk**: ~500 MB for models + index files for a typical 50-document corpus.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_BACKEND` | `ollama` | `ollama` \| `cloud` \| `both` |
+| `CLOUD_PROVIDER` | -- | `groq` \| `deepseek` \| `openrouter` \| `together` |
+| `CLOUD_API_KEY` | -- | API key for the chosen provider |
+| `CLOUD_MODEL` | -- | Model for chat (blank = provider default) |
+| `CLOUD_GRAPH_MODEL` | -- | Smaller model for graph extraction (e.g. `llama-3.1-8b-instant`) |
 
-## Performance vs v3
+---
 
-Expected improvements from EHRAG + HybGRAG:
-- **nDCG@10**: +5–10% from topic-aware entity evidence scoring
-- **Grounding overlap**: +3–8% from critic-driven context enrichment
-- **Hallucination rate**: Lower due to critic validation ensuring context adequacy
-- **Latency**: +50–200 ms per query (critic calls use fast 0.5b model)
-  Set `CRITIC_ENABLED=false` to recover full v3 latency.
+## Hardware requirements
 
-## File Structure
-
-```
-improve_RAG/
-├── ingest.py           -- PDF ingestion entry point
-├── app.py              -- Interactive chat
-├── eval_pipeline.py    -- Evaluation pipeline
-├── eval_prompts.txt    -- Test prompts
-├── requirements.txt    -- Dependencies (+ scipy, scikit-learn)
-├── .env.example        -- Environment variable template
-└── src/
-    ├── config.py       -- All settings + new EHRAG/HybGRAG config
-    ├── agent.py        -- Agent with HybGRAG critic loop
-    ├── graphrag.py     -- GraphRAG with EHRAG hypergraph
-    ├── hypergraph.py   -- EHRAG EntityHypergraph (NEW)
-    ├── critic.py       -- HybGRAG Critic validator + commenter (NEW)
-    ├── qdap.py         -- QDAP-S alpha predictor (unchanged)
-    ├── guardrail.py    -- Input/output safety (unchanged)
-    ├── query_expander.py -- Query paraphrase expansion (unchanged)
-    ├── router.py       -- Adaptive query router (unchanged)
-    ├── memory.py       -- SQLite + FAISS memory (unchanged)
-    ├── reranker.py     -- CrossEncoder reranker (unchanged)
-    ├── embedding.py    -- Ollama/ST embedding backend (unchanged)
-    ├── vector_store.py -- FAISS index wrapper (unchanged)
-    └── pdf_pipeline.py -- PDF → Chunk pipeline (unchanged)
-```
+| Setup | Notes |
+|-------|-------|
+| CPU-only | Fully supported. Set `EMBEDDING_BACKEND=sentence_transformers`. |
+| GPU | Ollama handles LLM inference. PyTorch GPU used for embeddings. |
+| RAM | 8 GB minimum recommended. |
+| Disk | ~500 MB for models + index files (typical 50-document corpus). |

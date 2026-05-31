@@ -69,10 +69,7 @@ if TYPE_CHECKING:
 
 from config import settings
 
-
-# ---------------------------------------------------------------------------
 # Unicode helpers
-# ---------------------------------------------------------------------------
 
 # Pre-compiled: combining diacritical marks block U+0300–U+036F.
 # Build the character-class string programmatically so the source file never
@@ -80,7 +77,6 @@ from config import settings
 _COMBINING_RE: re.Pattern = re.compile(
     "[" + chr(0x0300) + "-" + chr(0x036F) + "]"
 )
-
 
 def _no_accent(text: str) -> str:
     """Strip Vietnamese diacritics → ASCII-folded lowercase for pattern matching.
@@ -96,10 +92,7 @@ def _no_accent(text: str) -> str:
     text = text.replace("đ", "d")   # đ (U+0111, already lowercased by NFD step)
     return text
 
-
-# ---------------------------------------------------------------------------
 # GuardrailResult
-# ---------------------------------------------------------------------------
 
 @dataclass
 class GuardrailResult:
@@ -115,15 +108,12 @@ class GuardrailResult:
     reason: str
     sanitized_query: str
 
-
-# ---------------------------------------------------------------------------
 # Prompt-injection patterns
-# ---------------------------------------------------------------------------
 
 # Each compiled regex is matched against the accent-stripped, lowercased query.
 # Patterns are ordered: more specific / dangerous first.
 _INJECTION_PATTERNS: list[re.Pattern] = [
-    # ── Direct instruction override (English) ──────────────────────────────
+    # Direct instruction override (English)
     # No trailing \b on the third group so "instructions" / "prompts" match.
     re.compile(
         r"\b(ignore|disregard|forget|bypass|override|overwrite)\b"
@@ -154,14 +144,14 @@ _INJECTION_PATTERNS: list[re.Pattern] = [
     re.compile(r"\bprompt\s+(injection|leak|hack|attack)\b", re.I),
     re.compile(r"\bsystem:\s*\[", re.I),                                 # OpenAI-style fake system msg
     re.compile(r"\bassistant:\s*\[", re.I),
-    # ── Social-engineering pretexts ────────────────────────────────────────
+    # Social-engineering pretexts
     re.compile(r"\bgrandma\s+(used\s+to|would|told|said)\b", re.I),     # "grandma trick"
     re.compile(
         r"\bstep\s+by\s+step\b.{0,30}\b(how\s+to|instruction[s]?\s+for)\b"
         r".{0,40}\b(hack|exploit|bypass|inject)\b",
         re.I | re.S,
     ),
-    # ── Vietnamese — direct override (accent-stripped patterns) ────────────
+    # Vietnamese — direct override (accent-stripped patterns)
     re.compile(r"bo\s*qua.{0,40}(huong\s*dan|lenh|quy\s*tac|he\s*thong|loi\s*nhac)", re.I),
     re.compile(r"quen.{0,30}(tat\s*ca|huong\s*dan|lenh|quy\s*tac|noi\s*dung\s*tren)", re.I),
     re.compile(r"(dong\s*vai|gia\s*vo\s*la|tu\s*gio\s*ban\s*la|bay\s*gio\s*ban\s*la)", re.I),
@@ -177,23 +167,18 @@ _INJECTION_COMPACT_KEYWORDS: frozenset[str] = frozenset({
     "instructionoverride", "systembypass", "aigeneration",
 })
 
-
 # NOTE: Hardcoded toxic/OOD regex patterns have been removed.
 # Semantic intent classification is handled exclusively by LLMSafetyClassifier
 # (Layer 2 in InputGuardrail).  When no classifier is configured the system
 # passes through after injection-check + sanitisation — pair with
 # GUARDRAIL_LLM_CLASSIFY=true for production deployments.
 
-
-# ---------------------------------------------------------------------------
 # Sanitisation helpers
-# ---------------------------------------------------------------------------
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]")
 _XML_TAG_RE      = re.compile(r"<[^>]{1,200}>")
 _EXCESS_WS_RE    = re.compile(r"[ \t]{3,}")
 _NULL_BYTE_RE    = re.compile(r"\\u0000|\\x00|\x00")
-
 
 def _sanitize(text: str) -> str:
     """Strip control chars, XML injection tags, null bytes, excess whitespace."""
@@ -203,10 +188,7 @@ def _sanitize(text: str) -> str:
     text = _EXCESS_WS_RE.sub("  ", text)
     return unicodedata.normalize("NFC", text).strip()
 
-
-# ---------------------------------------------------------------------------
 # LLM Safety Classifier (Layer 2 — semantic intent detection)
-# ---------------------------------------------------------------------------
 
 class LLMSafetyClassifier:
     """
@@ -303,10 +285,7 @@ class LLMSafetyClassifier:
             # Ollama down, model missing, network error, etc. → fail-open
             return "SAFE"
 
-
-# ---------------------------------------------------------------------------
 # InputGuardrail
-# ---------------------------------------------------------------------------
 
 class InputGuardrail:
     """
@@ -345,7 +324,7 @@ class InputGuardrail:
         self._classifier = classifier
 
     def check(self, query: str) -> GuardrailResult:
-        # ── Layer 0: length guard ────────────────────────────────────────
+        # Layer 0: length guard 
         if len(query) > self.MAX_QUERY_LEN:
             return GuardrailResult(
                 action="block",
@@ -356,7 +335,7 @@ class InputGuardrail:
                 sanitized_query=query[: self.MAX_QUERY_LEN],
             )
 
-        # ── Layer 1: injection detection on RAW query ────────────────────
+        # Layer 1: injection detection on RAW query 
         # MUST run BEFORE _sanitize() because sanitization strips XML tags,
         # which are themselves a primary injection vector.
         raw_norm    = _no_accent(query)
@@ -373,10 +352,10 @@ class InputGuardrail:
                 sanitized_query=_sanitize(query),
             )
 
-        # ── Sanitise → build normalised form for remaining layers ─────────
+        # Sanitise → build normalised form for remaining layers 
         clean = _sanitize(query)
 
-        # ── Layer 2: LLM semantic classifier (preferred path) ────────────
+        # Layer 2: LLM semantic classifier (preferred path) 
         if self._classifier is not None:
             label = self._classifier.classify(clean)
             if label == "HARMFUL":
@@ -409,12 +388,12 @@ class InputGuardrail:
             # SAFE → allow (LLM classification subsumes toxic + OOD regex)
             return GuardrailResult(action="allow", reason="", sanitized_query=clean)
 
-        # ── No classifier configured → allow (semantic filtering requires LLM) ──
+        # No classifier configured → allow (semantic filtering requires LLM) ──
         # Set GUARDRAIL_LLM_CLASSIFY=true and pull the classify model to enable
         # semantic harmful/OOD detection.
         return GuardrailResult(action="allow", reason="", sanitized_query=clean)
 
-    # ── Private helpers ──────────────────────────────────────────────────
+    # Private helpers 
 
     @staticmethod
     def _check_injection(norm: str, compact: str) -> str:
@@ -428,10 +407,7 @@ class InputGuardrail:
                 return kw
         return ""
 
-
-# ---------------------------------------------------------------------------
 # Output hallucination markers
-# ---------------------------------------------------------------------------
 
 # Phrases the LLM uses when fabricating information not from context.
 # Matched on accent-stripped answer text.
@@ -452,10 +428,7 @@ _HALLUCINATION_MARKERS: list[re.Pattern] = [
 #: Below this threshold the answer is flagged as potentially ungrounded.
 _MIN_GROUNDING_OVERLAP: float = 0.10
 
-
-# ---------------------------------------------------------------------------
 # OutputGuardrail
-# ---------------------------------------------------------------------------
 
 class OutputGuardrail:
     """
@@ -513,7 +486,7 @@ class OutputGuardrail:
 
         return GuardrailResult(action="allow", reason="", sanitized_query=answer)
 
-    # ── Private helpers ──────────────────────────────────────────────────
+    # Private helpers
 
     @staticmethod
     def _check_grounding(norm_answer: str, norm_context: str) -> str:
